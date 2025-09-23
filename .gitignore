@@ -1,0 +1,13 @@
+build/
+install/
+log/
+logs/
+tmp/
+.colcon/
+.venv/
+__pycache__/
+local/
+config/local.yaml
+.vscode/
+.idea/
+.DS_Store
