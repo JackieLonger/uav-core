@@ -1,6 +1,0 @@
-# 請複製為 config/local.yaml 再依本機調整（這份不進 Git）
-secrets:
-  meshtastic_token: "REPLACE_ME"
-override:
-  topics:
-    pose: "/uavX/local_position/pose"

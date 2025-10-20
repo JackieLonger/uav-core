@@ -1,7 +1,0 @@
-uav:
-  id: "uav-default"
-serial:
-  device: "/dev/ttyUSB0"
-  baud: 921600
-topics:
-  pose: "/uav/local_position/pose"

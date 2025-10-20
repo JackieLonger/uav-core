@@ -11,3 +11,8 @@ config/local.yaml
 .vscode/
 .idea/
 .DS_Store
+
+# 文檔 (不上傳，本地版本管理)
+*.md
+!README.md
+!src/**/README.md

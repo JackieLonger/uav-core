@@ -1,0 +1,9 @@
+# 訊號品質訊息
+std_msgs/Header header
+string node_id
+float32 rssi
+float32 snr
+float32 forward_rssi
+float32 forward_snr
+float32 return_rssi
+float32 return_snr
