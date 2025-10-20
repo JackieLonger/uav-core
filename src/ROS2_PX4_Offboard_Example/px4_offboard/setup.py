@@ -31,7 +31,12 @@ setup(
                 'visualizer = px4_offboard.visualizer:main',
                 'velocity_control = px4_offboard.velocity_control:main',
                 'control = px4_offboard.control:main',
-                'processes = px4_offboard.processes:main'
+                'processes = px4_offboard.processes:main',
+                # ===== 新增: 訊號優化系統 =====
+                'fast_scan = px4_offboard.fast_scan_node:main',
+                'signal_optimizer_v2 = px4_offboard.signal_optimizer_node_v2:main',
+                'signal_visualizer_v2 = px4_offboard.signal_visualizer_node_v2:main',
+                'multi_drone_coordinator = px4_offboard.multi_drone_coordinator:main'
         ],
     },
 )
