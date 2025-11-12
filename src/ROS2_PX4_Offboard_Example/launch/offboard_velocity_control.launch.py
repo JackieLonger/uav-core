@@ -73,11 +73,11 @@ def generate_launch_description():
             executable='velocity_control',
             name='velocity'
         ),
-        # Node(
-        #     package='rviz2',
-        #     namespace='',
-        #     executable='rviz2',
-        #     name='rviz2',
-        #     arguments=['-d', [os.path.join(package_dir, 'visualize.rviz')]]
-        # )
+        Node(
+            package='rviz2',
+            namespace='',
+            executable='rviz2',
+            name='rviz2',
+            arguments=['-d', [os.path.join(package_dir, 'visualize.rviz')]]
+        )
     ])

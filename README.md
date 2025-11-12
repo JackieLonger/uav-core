@@ -1,14 +1,13 @@
-# 📖 快速參考指南
+# 🎯 UAV 訊號優化系統 - 快速開始
 
-## 📚 文檔列表 (只需要這些!)
+## 📚 核心文檔 (按優先級)
 
-| 文檔 | 用途 | 閱讀時間 |
-|------|------|---------|
-| **MODE_SEARCH.md** | 永遠移動找訊號 | 3 分鐘 |
-| **MODE_HOLD.md** | 找到最佳點後停留 | 3 分鐘 |
-| **SINGLE_MACHINE_TEST.md** | 單機測試步驟 | 5 分鐘 |
-| **HOW_TO_MODIFY.md** | 修改算法/平滑度 | 10 分鐘 |
-| **SYSTEM_ARCHITECTURE.md** | 系統設計文檔 | 10 分鐘 |
+| 文檔 | 用途 | 讀者 | 時間 |
+|------|------|------|------|
+| **TESTING_GUIDE.md** ⭐⭐⭐ | 完整測試流程和邏輯 | **所有人 必讀** | 20 分鐘 |
+| **QUICK_REFERENCE.md** ⭐⭐ | 快速命令參考 | 開發者 | 5 分鐘 |
+| **JETSON_DEPLOYMENT_GUIDE_FINAL.md** ⭐⭐ | Jetson 部署詳細指南 | Jetson 用戶 | 15 分鐘 |
+| **FINAL_BUILD_REPORT.md** | 編譯驗證報告 | 構建工程師 | 10 分鐘 |
 
 ---
 
@@ -100,120 +99,151 @@ if improvement > self.convergence_threshold:  # ← 改這裡
 
 ---
 
-## 📊 參數解釋
+## � 快速啟動 (30 秒)
 
-| 參數 | 值 | 含義 |
-|------|-----|------|
-| `search_mode:=fast` | 2×2m | 快速小範圍 |
-| `search_mode:=thorough` | 3×3m | 完整大範圍 |
-| `convergence_iterations:=3` | 3 次 | 3 次無改進停留 (2-3m) |
-| `convergence_iterations:=5` | 5 次 | 5 次無改進停留 (3-5m) ⭐ |
-| `convergence_iterations:=7` | 7 次 | 7 次無改進停留 (5-7m) |
-| `convergence_iterations:=999` | ∞ | 永遠搜索 |
+### Jetson 端
+
+```bash
+# 1. 進入工作目錄並編譯 (首次)
+cd ~/uav-core && colcon build --merge-install
+
+# 2. 載入環境
+source install/setup.bash
+
+# 3. 啟動優化器
+ros2 run ros2_px4_offboard_example signal_optimizer_node_v3.py
+```
+
+### 筆電端 (監控)
+
+```bash
+# 終端 1: 訊號掃描
+source ~/uav-core/install/setup.bash
+ros2 run ros2_px4_offboard_example fast_scan_node.py
+
+# 終端 2: 監看無人機狀態
+ros2 topic echo /drone_1/optimizer_status
+
+# 終端 3: 監看訊號歷史
+ros2 topic echo /drone_1/signal_history
+```
 
 ---
 
-## 🎯 選擇指南
+## 📋 測試流程
 
-### 我想要什麼? 用哪個?
+### 🎯 單機測試流程
 
 ```
-✓ 永遠尋找最強訊號
-  → MODE_SEARCH.md (convergence_iterations:=999)
-
-✓ 找到最佳點後停留
-  → MODE_HOLD.md (convergence_iterations:=3/5/7)
-
-✓ 快速完成 (2-3 分鐘)
-  → MODE_HOLD.md + convergence_iterations:=3
-
-✓ 精確搜索 (5-7 分鐘)
-  → MODE_HOLD.md + search_mode:=thorough + convergence_iterations:=7
-
-✓ 改變算法
-  → HOW_TO_MODIFY.md (修改 1)
-
-✓ 改變平滑度
-  → HOW_TO_MODIFY.md (修改 2)
-
-✓ 進行單機測試
-  → SINGLE_MACHINE_TEST.md
+[Jetson 連接 Pixhawk]
+         ↓
+[啟動優化器節點]
+         ↓
+[檢查訊號接收]
+         ↓
+[自動 ARM 和起飛]
+         ↓
+[在 3×3×3m 搜索最佳訊號點]
+         ↓
+[30-90 秒後收斂]
+         ↓
+[進入 HOLD 模式停留]
 ```
+
+**詳細步驟 → 參考 TESTING_GUIDE.md**
+
+### 🚁 多機獨立測試流程 (推薦)
+
+```
+[Jetson-1]  [Jetson-2]  [Jetson-3]
+     ↓           ↓            ↓
+  [啟動]      [啟動]       [啟動]
+     ↓           ↓            ↓
+  [搜索]      [搜索]       [搜索]
+  空間1      空間2       空間3
+  
+完全獨立，無干擾 ✅
+```
+
+**詳細步驟 → 參考 TESTING_GUIDE.md**
 
 ---
 
 ## ✅ 成功標誌
 
-### 版本 A (持續搜索)
-```
-不停止 (直到 Ctrl+C)
+### 單機測試
+```bash
+# 預期輸出
+[INFO] 🤖 Signal optimizer v3 ready | Drone: drone_1 | Mode: search
+[INFO] 🔋 Vehicle status: ARMING_STATE_STANDBY
+[INFO] 🚀 Armed successfully
+[INFO] ✈️ Takeoff complete, starting search
+[INFO] 📊 Evaluating signal... Score: 42.5
+# ... 繼續搜索 ...
+[INFO] 🎯 Convergence detected! Switching to HOLD mode
+[INFO] ⏸️ Holding position at (x, y, z)
 ```
 
-### 版本 B (自動停留)
-```
-[INFO] 🎯 收斂完成！切換到 HOLD 模式
-[INFO] ⏸️ 停留在最佳點 (X, Y) | Best Signal: XXX
+### 多機測試
+```bash
+# 終端輸出 (多個無人機)
+/drone_1/optimizer_status
+/drone_2/optimizer_status
+/drone_3/optimizer_status
+
+# 各無人機位置不重疊，獨立收斂
 ```
 
 ---
 
-## 🆘 快速幫助
+## 🆘 常見問題
 
-| 問題 | 檢查 |
-|------|------|
-| MicroXRCE 無反應 | 終端 1 是否有 "Connected!" |
-| 無節點輸出 | 終端 2 是否 source setup.bash |
-| 無訊號 | Meshtastic 是否連接 |
-| 無人機不動 | PX4 是否進入 Offboard 模式 |
+| 問題 | 解決方案 |
+|------|--------|
+| **無法接收訊號** | 檢查 Meshtastic 是否配置；查看 `/link_quality` 話題 |
+| **無法 ARM** | 檢查 PX4 狀態；查看電池電量 |
+| **無人機不動** | 檢查 OffboardControlMode 和速度命令是否發送 |
+| **多機位置重疊** | 調整 `search_bounds_x/y/z` 參數；或分別在不同位置起飛 |
 
-**詳細:** `SINGLE_MACHINE_TEST.md` → 故障排除
+**詳細故障排查 → 參考 TESTING_GUIDE.md**
 
 ---
 
-## 📝 修改完成後
+## 📚 文檔導航
 
-每次修改代碼後:
+- **TESTING_GUIDE.md** ⭐ - 完整測試邏輯和流程 (必讀!)
+- **QUICK_REFERENCE.md** - ROS2 快速命令參考
+- **JETSON_DEPLOYMENT_GUIDE_FINAL.md** - Jetson 部署詳細步驟
+- **FINAL_BUILD_REPORT.md** - 編譯驗證報告
+
+---
+
+## 📝 每次修改後
 
 ```bash
-# 1. 重新編譯
 cd ~/uav-core
+
+# 1. 重新編譯
 colcon build --merge-install
 
-# 2. 重新載入環境
+# 2. 重新載入
 source install/setup.bash
 
-# 3. 重新啟動節點
-ros2 launch px4_offboard single_drone_fast.launch.py ...
+# 3. 重新啟動
+ros2 run ros2_px4_offboard_example signal_optimizer_node_v3.py
 ```
 
 ---
 
-## 🚀 一鍵啟動
+## 🎓 核心概念
 
-**版本 A (搜索):**
-```bash
-cd ~/uav-core && source install/setup.bash && \
-ros2 launch px4_offboard single_drone_fast.launch.py search_mode:=fast convergence_iterations:=999
-```
-
-**版本 B (停留) [推薦]:**
-```bash
-cd ~/uav-core && source install/setup.bash && \
-ros2 launch px4_offboard single_drone_fast.launch.py search_mode:=fast convergence_iterations:=5
-```
-
----
-
-## 📊 版本對比
-
-| 項目 | 版本 A (搜索) | 版本 B (停留) |
-|------|--------------|--------------|
-| 行為 | 永遠移動 | 搜索→停留 |
-| 終止 | 手動停止 | 自動停留 |
-| 時間 | 無限 | 3-5 分鐘 |
-| 用途 | 環境監測 | 信號優化 |
-| 能耗 | ❌ 高 | ✅ 低 |
-| 適用 | 動態環境 | 靜態部署 |
+| 概念 | 說明 |
+|------|------|
+| **訊號評分** | `Score = SNR × 0.7 + (RSSI / -50) × 100 × 0.3` |
+| **3×3×3m 搜索** | 每個無人機在 (±1.5m X/Y, 0~3m Z) 範圍內搜索 |
+| **雙 Tracker** | 優化器等待兩個信號源都提供數據後再決策 |
+| **收斂判定** | 連續 5 次 (可配置) 無改進就進入 HOLD 模式 |
+| **HOLD 模式** | 無人機停留在最佳點，零速度命令 |
 
 ---
 

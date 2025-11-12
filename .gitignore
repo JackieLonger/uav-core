@@ -12,7 +12,26 @@ config/local.yaml
 .idea/
 .DS_Store
 
-# 文檔 (不上傳，本地版本管理)
-*.md
-!README.md
-!src/**/README.md
+# Python 编译文件
+*.pyc
+*.pyo
+*.egg-info/
+
+# ROS2 编译产物
+compile_commands.json
+*.cmake
+CMakeCache.txt
+CMakeFiles/
+Makefile
+CTestTestfile.cmake
+install_manifest.txt
+
+# 临时文件
+*.swp
+*.swo
+*~
+.*.sw?
+
+# 子模块（使用 thirdparty.repos 管理）
+src/px4_msgs/
+src/px4_ros_com/

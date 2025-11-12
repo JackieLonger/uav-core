@@ -3,22 +3,27 @@
 <package format="3">
   <name>ros2_px4_offboard_example</name>
   <version>0.0.1</version>
-  <description>ROS2 PX4 Offboard Control Example with Meshtastic Signal Optimization</description>
+  <description>
+    Meta package for PX4 Offboard Control and Meshtastic signal optimization.
+    This package contains and depends on the actual Python ROS 2 package "px4_offboard".
+  </description>
+
   <maintainer email="your.email@example.com">JackieLonger</maintainer>
   <license>Apache License 2.0</license>
 
+  <!-- 這個是純 meta package，因此只需要 ament_cmake -->
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
-  <depend>rclpy</depend>
-  <depend>px4_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>meshtastic_ros_bridge_msgs</depend>
-  <depend>builtin_interfaces</depend>
-  <depend>rosidl_default_generators</depend>
-  <depend>px4_msgs</depend>
+  <!-- 主要執行依賴的實際子套件 -->
+  <exec_depend>px4_offboard</exec_depend>
 
+  <!-- 以下是對應 Python 節點運行時會用到的套件依賴 -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>meshtastic_ros_bridge_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 

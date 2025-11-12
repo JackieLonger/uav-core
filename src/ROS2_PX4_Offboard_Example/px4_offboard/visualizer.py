@@ -36,7 +36,15 @@ __author__ = "Jaeyoung Lim"
 __contact__ = "jalim@ethz.ch"
 
 from re import M
-import numpy as np
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
+else:
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
 
 import rclpy
 from rclpy.node import Node
