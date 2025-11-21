@@ -31,14 +31,15 @@ class FastScanNode(Node):
     def __init__(self):
         super().__init__('fast_scan_node')
         
-        # 聲明參數：每架無人機綁定自己的兩個 Tracker
-        self.declare_parameter('tracker_a_id', '!e2e5b7c4')  # 默认值（可覆盖）
-        self.declare_parameter('tracker_b_id', '!e2e5b8f8')  # 默认值（可覆盖）
+        # ===== 配置区域：每架无人机的 Jetson 需手动修改以下 Tracker ID =====
+        # Tracker ID 格式：以 "!" 开头的 Meshtastic 节点 ID
+        # 例如：TRACKER_A_ID = "!e2e5b7c4"
+        #       TRACKER_B_ID = "!e2e5b8f8"
+        TRACKER_A_ID = "!e2e5b7c4"  # ← 修改为实际的 Tracker A 节点 ID
+        TRACKER_B_ID = "!e2e5b8f8"  # ← 修改为实际的 Tracker B 节点 ID
+        # =====================================================================
         
-        # 獲取參數
-        tracker_a = self.get_parameter('tracker_a_id').value
-        tracker_b = self.get_parameter('tracker_b_id').value
-        self.target_node_ids = [tracker_a, tracker_b]
+        self.target_node_ids = [TRACKER_A_ID, TRACKER_B_ID]
         
         self.callback_group = ReentrantCallbackGroup()
         self.link_pub = self.create_publisher(String, 'link_quality', 10)

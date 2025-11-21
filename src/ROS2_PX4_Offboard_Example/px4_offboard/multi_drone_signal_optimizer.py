@@ -518,8 +518,19 @@ class MultiDroneSignalOptimizer(Node):
                     f"质量 {state.current_quality:.3f}"
                 )
                 
-                # 等待下一轮扫描（约 120 秒）
-                time.sleep(2.0)
+                # 移动约 3 秒后，重置速度为零（悬停等待下一轮扫描）
+                time.sleep(3.0)
+                
+                # 重置速度为零，无人机悬停等待下一轮 Tracker 扫描
+                with state.lock:
+                    state.current_velocity = (0.0, 0.0, 0.0)
+                
+                self.get_logger().info(
+                    f"Drone {drone_id}: 移动完成，悬停等待下一轮扫描"
+                )
+                
+                # 等待下一轮扫描（约 120 秒）- 已在悬停状态
+                time.sleep(1.0)
                 
             except Exception as e:
                 self.get_logger().error(f"Drone {drone_id}: 决策循环异常: {e}")

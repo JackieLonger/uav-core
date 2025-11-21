@@ -11,6 +11,10 @@ Jetson 机载节点启动文件
 - 启动 fast_scan_node（扫描 Meshtastic）
 - 启动 velocity_control（接收速度指令 → 发给 Pixhawk）
 - 自动配置正确的 topic 名称
+
+注意：
+- Tracker ID 已在 fast_scan_node.py 中硬编码
+- 每架无人机的 Jetson 需手动修改 fast_scan_node.py 的配置区域
 """
 
 from launch import LaunchDescription
@@ -27,23 +31,10 @@ def generate_launch_description():
         description='无人机编号（1, 2, 3, ...）'
     )
     
-    tracker_a_arg = DeclareLaunchArgument(
-        'tracker_a_id',
-        default_value='!e2e5b7c4',
-        description='绑定的第一个 Tracker ID'
-    )
-    
-    tracker_b_arg = DeclareLaunchArgument(
-        'tracker_b_id',
-        default_value='!e2e5b8f8',
-        description='绑定的第二个 Tracker ID'
-    )
-    
     drone_id = LaunchConfiguration('drone_id')
-    tracker_a_id = LaunchConfiguration('tracker_a_id')
-    tracker_b_id = LaunchConfiguration('tracker_b_id')
     
     # 1. fast_scan_node（扫描 Meshtastic）
+    # 注意：Tracker ID 已在节点代码中硬编码
     fast_scan_node = Node(
         package='px4_offboard',
         executable='fast_scan',
@@ -55,8 +46,6 @@ def generate_launch_description():
         ],
         parameters=[{
             'use_sim_time': False,
-            'tracker_a_id': tracker_a_id,
-            'tracker_b_id': tracker_b_id,
         }]
     )
     
@@ -77,8 +66,6 @@ def generate_launch_description():
     
     return LaunchDescription([
         drone_id_arg,
-        tracker_a_arg,
-        tracker_b_arg,
         fast_scan_node,
         velocity_control_node,
     ])
