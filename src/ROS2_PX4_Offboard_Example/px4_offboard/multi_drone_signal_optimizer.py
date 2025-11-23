@@ -102,11 +102,10 @@ class DroneState:
     """单个无人机的状态（线程安全）"""
     drone_id: int
     
-    # Tracker 数据
-    tracker_a_data: Optional[TrackerData] = None  # !e2e5b7c4
-    tracker_b_data: Optional[TrackerData] = None  # !e2e5b8f8
-    tracker_a_ready: bool = False
-    tracker_b_ready: bool = False
+    # Tracker 数据 (动态绑定)
+    dynamic_tracker_ids: list = field(default_factory=list)   # 最多两个
+    tracker_data_map: Dict[str, TrackerData] = field(default_factory=dict)
+    tracker_ready_map: Dict[str, bool] = field(default_factory=dict)
     
     # 位置信息
     current_position: Position = field(default_factory=Position)
@@ -130,21 +129,32 @@ class DroneState:
     def both_trackers_ready(self) -> bool:
         """两个信号都到了"""
         with self.lock:
-            return self.tracker_a_ready and self.tracker_b_ready
+            if len(self.dynamic_tracker_ids) < 2:
+                return False
+            # 两个都在并且 ready
+            return all(self.tracker_ready_map.get(tid, False) for tid in self.dynamic_tracker_ids)
     
     def reset_tracker_flags(self):
         """决策后重置，等待下一轮扫描"""
         with self.lock:
-            self.tracker_a_ready = False
-            self.tracker_b_ready = False
+            for tid in self.dynamic_tracker_ids:
+                self.tracker_ready_map[tid] = False
     
     def update_tracker_data(self, json_data: dict):
         """更新 tracker 数据（线程安全）"""
         with self.lock:
-            target_id = json_data['target_id']
-            
             # 跳过失败的扫描
             if json_data.get('status') != 'Success':
+                return
+
+            target_id = json_data['target_id']
+            
+            # 若尚未收集满两个 tracker，加入新 ID
+            if target_id not in self.dynamic_tracker_ids and len(self.dynamic_tracker_ids) < 2:
+                self.dynamic_tracker_ids.append(target_id)
+            
+            # 若收到不在本无人机绑定范围的第三种 ID，直接忽略
+            if target_id not in self.dynamic_tracker_ids:
                 return
             
             tracker_data = TrackerData(
@@ -157,21 +167,21 @@ class DroneState:
                 status=json_data.get('status', 'Unknown')
             )
             
-            if target_id == "!e2e5b7c4":
-                self.tracker_a_data = tracker_data
-                self.tracker_a_ready = True
-            elif target_id == "!e2e5b8f8":
-                self.tracker_b_data = tracker_data
-                self.tracker_b_ready = True
+            self.tracker_data_map[target_id] = tracker_data
+            self.tracker_ready_map[target_id] = True
     
     def calculate_current_quality(self) -> float:
         """计算当前综合质量"""
         with self.lock:
-            if self.tracker_a_data is None or self.tracker_b_data is None:
+            if len(self.dynamic_tracker_ids) < 2:
                 return 0.0
             
-            quality_a = self.tracker_a_data.quality_score
-            quality_b = self.tracker_b_data.quality_score
+            a_id, b_id = self.dynamic_tracker_ids
+            if a_id not in self.tracker_data_map or b_id not in self.tracker_data_map:
+                return 0.0
+            
+            quality_a = self.tracker_data_map[a_id].quality_score
+            quality_b = self.tracker_data_map[b_id].quality_score
             
             # 平均质量
             return (quality_a + quality_b) / 2.0
@@ -190,10 +200,6 @@ class MultiDroneSignalOptimizer(Node):
     BOUNDS_X = (-1.5, 1.5)
     BOUNDS_Y = (-1.5, 1.5)
     BOUNDS_Z = (0.0, 3.0)  # 只能上升
-    
-    # Tracker IDs
-    TRACKER_A_ID = "!e2e5b7c4"
-    TRACKER_B_ID = "!e2e5b8f8"
     
     def __init__(self):
         super().__init__('multi_drone_signal_optimizer')

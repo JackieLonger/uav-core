@@ -1,651 +1,323 @@
-# UAV Multi-Drone Signal Optimization System# 🎯 UAV 訊號優化系統 - 快速開始
+# 🎯 UAV 多無人機訊號優化系統
 
+> 多無人機協同 LoRa 訊號優化系統 - 基於 ROS2 + PX4 的自主訊號搜尋與定位
 
+[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue)](https://docs.ros.org/en/humble/)
+[![PX4](https://img.shields.io/badge/PX4-v1.14.3-green)](https://docs.px4.io/)
+[![Python](https://img.shields.io/badge/Python-3.10-yellow)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-orange)](LICENSE)
 
-> 多無人機協同 LoRa 訊號優化系統 - 基於 ROS2 + PX4 的自主訊號搜尋與定位## 📚 核心文檔 (按優先級)
+---
 
+## 📚 核心文檔 (按優先級)
 
+| 文檔 | 用途 | 讀者 | 時間 |
+|------|------|------|------|
+| **DYNAMIC_TRACKER_TEST_GUIDE.md** ⭐⭐⭐ | 動態 Tracker ID 測試指南 | **所有人 必讀** | 15 分鐘 |
+| **DUAL_TERMINAL_TEST_GUIDE.md** ⭐⭐⭐ | 雙終端測試完整流程 | **所有人 必讀** | 20 分鐘 |
+| **QUICK_START.md** ⭐⭐ | 快速命令參考 | 開發者 | 5 分鐘 |
+| **SINGLE_MACHINE_TESTING.md** ⭐⭐ | 單機測試指南 | 測試人員 | 15 分鐘 |
+| **MULTI_DRONE_OPTIMIZER_GUIDE.md** ⭐ | 多機優化器詳細手冊 | 高級用戶 | 30 分鐘 |
+| **FINAL_EXPERIMENT_CONFIRMATION.md** | 實驗確認檢查清單 | 飛行前檢查 | 10 分鐘 |
+| **BUG_FIX_AND_CONFIGURATION_CHANGES.md** | Bug 修復記錄 | 開發者 | 10 分鐘 |
+| **PROJECT_STRUCTURE.md** | 項目結構說明 | 維護者 | 10 分鐘 |
+| **ROS2_TOPIC_FLOW.md** | Topic 訂閱關係圖 | 調試人員 | 10 分鐘 |
+| **HOLD_MECHANISM_REFACTORING_CHINESE.md** | 懸停機制技術細節 | 開發者 | 20 分鐘 |
 
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue)](https://docs.ros.org/en/humble/)| 文檔 | 用途 | 讀者 | 時間 |
+---
 
-[![PX4](https://img.shields.io/badge/PX4-v1.14.3-green)](https://docs.px4.io/)|------|------|------|------|
+## 📖 項目簡介
 
-[![Python](https://img.shields.io/badge/Python-3.10-yellow)](https://www.python.org/)| **TESTING_GUIDE.md** ⭐⭐⭐ | 完整測試流程和邏輯 | **所有人 必讀** | 20 分鐘 |
+本系統實現多架無人機協同優化 Meshtastic LoRa 訊號質量，每架無人機自主搜索其綁定的地面 Tracker 組合，找到最佳訊號接收位置。
 
-[![License](https://img.shields.io/badge/License-MIT-orange)](LICENSE)| **QUICK_REFERENCE.md** ⭐⭐ | 快速命令參考 | 開發者 | 5 分鐘 |
+### ✨ 核心特性
 
-| **JETSON_DEPLOYMENT_GUIDE_FINAL.md** ⭐⭐ | Jetson 部署詳細指南 | Jetson 用戶 | 15 分鐘 |
-
----| **FINAL_BUILD_REPORT.md** | 編譯驗證報告 | 構建工程師 | 10 分鐘 |
-
-
-
-## 📖 項目簡介---
-
-
-
-本系統實現多架無人機協同優化 Meshtastic LoRa 訊號質量，每架無人機自主搜索其綁定的地面 Tracker 組合，找到最佳訊號接收位置。## ⚡ 快速啟動命令
-
-
-
-### ✨ 核心特性### 版本 A: 持續搜索 (永遠移動)
-
-
-
-- 🚁 **多機協同**: 支持最多 3 架無人機同時作業（可擴展）```bash
-
-- 🎯 **自主優化**: 基於 RSSI/SNR 的梯度上升算法# 終端 1
-
-- 📡 **獨立綁定**: 每架無人機綁定專屬的兩個 Meshtastic TrackerMicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
-
+- 🚁 **多機協同**: 支持最多 3 架無人機同時作業（可擴展）
+- 🎯 **自主優化**: 基於 RSSI/SNR 的梯度上升算法
+- 📡 **動態綁定**: 每架無人機自動識別其綁定的兩個 Meshtastic Tracker
 - 🎨 **即時可視化**: RViz2 顯示所有無人機狀態、軌跡和訊號質量
+- 🔧 **靈活部署**: 支援 Jetson Orin Nano 機載計算 + 筆電地面站架構
+- 🛡️ **安全保障**: RC Override 隨時可介入，邊界保護，速度限制
 
-- 🔧 **靈活部署**: 支援 Jetson Orin Nano 機載計算 + 筆電地面站架構# 終端 2
+### 🏗️ 系統架構
 
-cd ~/uav-core && source install/setup.bash
-
-### 🏗️ 系統架構ros2 launch px4_offboard single_drone_fast.launch.py \
-
-  search_mode:=fast convergence_iterations:=999
-
-``````
-
+```
 ┌─────────────────────────────────────────────────────────────────┐
-
-│                    筆記本（地面站）                              │**詳見:** `MODE_SEARCH.md`
-
+│                    筆記本（地面站）                              │
 │  ┌───────────────────────────────────────────────────────────┐  │
-
-│  │  multi_drone_signal_optimizer.py (決策中心)              │  │---
-
+│  │  multi_drone_signal_optimizer.py (決策中心)              │  │
 │  │  - 多線程異步處理                                         │  │
-
-│  │  - RViz2 可視化                                           │  │### 版本 B: 自動停留 (推薦) ⭐
-
+│  │  - 動態 Tracker ID 識別                                  │  │
+│  │  - RViz2 可視化                                           │  │
 │  └───────────────────────────────────────────────────────────┘  │
-
-└─────────────────────────────────────────────────────────────────┘```bash
-
-         ↕ (WiFi/DDS)# 終端 1
-
-┌─────────────────────┐              ┌─────────────────────────┐MicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
-
+└─────────────────────────────────────────────────────────────────┘
+         ↕ (WiFi/ROS2 DDS)
+┌─────────────────────┐              ┌─────────────────────────┐
 │  Jetson N (機載)    │              │  Pixhawk 6C (飛控)      │
-
-│  - fast_scan_node   │◄────────────►│  - PX4 v1.14.3          │# 終端 2
-
-│  - velocity_control │  (UART/MAVLink)│  - Offboard Mode       │cd ~/uav-core && source install/setup.bash
-
-│  綁定: TrackerNA/NB │              └─────────────────────────┘ros2 launch px4_offboard single_drone_fast.launch.py \
-
-└─────────────────────┘  search_mode:=fast convergence_iterations:=5
-
-``````
-
-
-
-**重要**: 6 個 Tracker 總數，每機綁定 2 個（Drone 1 → 1A/1B, Drone 2 → 2A/2B, Drone 3 → 3A/3B）**詳見:** `MODE_HOLD.md`
-
-
-
-------
-
-
-
-## 📋 目錄導航## 🧪 單機測試 5 步
-
-
-
-### 🎯 快速開始1. **準備:** Jetson/PX4/Meshtastic 都已開機
-
-- **[QUICK_START.md](QUICK_START.md)** - 5 分鐘快速啟動指南 ⭐ **推薦首先閱讀**2. **MicroXRCE:** 終端 1 執行上面的命令
-
-- **[SINGLE_MACHINE_TESTING.md](SINGLE_MACHINE_TESTING.md)** - 單機測試步驟3. **ROS2 節點:** 終端 2 執行上面的命令
-
-4. **監控:** 看終端 2 輸出 3-5 分鐘
-
-### 📚 詳細文檔5. **完成:** 看到 `🎯 收斂完成!` 或永遠移動
-
-- **[MULTI_DRONE_OPTIMIZER_GUIDE.md](MULTI_DRONE_OPTIMIZER_GUIDE.md)** - 完整系統使用手冊 ⭐ **主要文檔**
-
-- **[HOLD_MECHANISM_REFACTORING_CHINESE.md](HOLD_MECHANISM_REFACTORING_CHINESE.md)** - 悬停優化機制說明**詳見:** `SINGLE_MACHINE_TEST.md`
-
-
-
-### 🔧 開發文檔---
-
-- **[thirdparty.repos](thirdparty.repos)** - 依賴包配置
-
-- **[setup.sh](setup.sh)** - 環境設置腳本## 🔧 如何修改
-
-
-
----### 改變搜索算法
-
-
-
-## 🛠️ 系統要求方案:
-
-- 隨機遊走 (Random Walk) - 當前
-
-### 硬體需求- 網格搜索 (Grid Search) - 完整覆蓋
-
-- 梯度上升 (Gradient Ascent) - 聰明移動
-
-| 組件 | 規格 | 數量 |- 螺旋搜索 (Spiral Search) - 系統搜索
-
-|------|------|------|
-
-| **無人機平台** | 支援 PX4 的四旋翼 | 1-3 台 |**詳見:** `HOW_TO_MODIFY.md` → 修改 1
-
-| **飛控** | ARK Electronics Pixhawk 6C | 1-3 台 |
-
-| **機載電腦** | NVIDIA Jetson Orin Nano (8GB) | 1-3 台 |---
-
-| **地面站** | 筆記本電腦（Ubuntu 22.04） | 1 台 |
-
-| **LoRa 模組** | Heltec Tracker V3 (Meshtastic) | 6 台 |### 改變信號平滑度
-
-| **通訊** | WiFi 路由器（ROS2 DDS） | 1 台 |
-
-改變訊號窗口大小:
-
-### 軟體版本```python
-
-if len(self.signal_history) > 3:  # ← 改 3 為其他值
-
-#### 地面站 (筆記本)    self.signal_history.pop(0)
-
-```yaml```
-
-作業系統: Ubuntu 22.04 LTS
-
-ROS2: Humble Hawksbill- 更小 (如 2): 反應快, 雜訊多
-
-Python: 3.10+- 更大 (如 5): 反應慢, 更穩定
-
-可視化: RViz2
-
-依賴: numpy, scipy**詳見:** `HOW_TO_MODIFY.md` → 修改 2
-
+│  - fast_scan_node   │◄────────────►│  - PX4 v1.14.3          │
+│  - velocity_control │  (UART/MAVLink)│  - Offboard Mode       │
+│  綁定: TrackerNA/NB │              └─────────────────────────┘
+└─────────────────────┘
+         ↕ (USB)
+┌─────────────────────┐
+│  Meshtastic LoRa    │
+│  Tracker A & B      │
+└─────────────────────┘
 ```
+
+**重要**: 
+- 6 個 Tracker 總數，每機綁定 2 個（Drone 1 → 1A/1B, Drone 2 → 2A/2B, Drone 3 → 3A/3B）
+- Tracker ID 在 Jetson 的 `fast_scan_node.py` 中手動配置
+- 筆電端的優化器會自動識別每台無人機回傳的 Tracker ID（動態綁定）
 
 ---
 
-#### 機載電腦 (Jetson)
+## ⚡ 快速啟動命令
 
-```yaml### 改變改進判定
-
-作業系統: Ubuntu 22.04 LTS (ARM64)
-
-ROS2: Humble Hawksbill```python
-
-Python: 3.10+if improvement > self.convergence_threshold:  # ← 改這裡
-
-Meshtastic: meshtastic-python >= 2.2.0```
-
-```
-
-- 降低 (如 0.1): 更容易認為改進
-
-#### 飛控 (Pixhawk)- 提高 (如 1.0): 只有顯著改進
-
-```yaml
-
-韌體: PX4 v1.14.3**詳見:** `HOW_TO_MODIFY.md` → 修改 3
-
-協議: MAVLink 2.0
-
-通訊: MicroXRCE-DDS Agent---
-
-```
-
-## � 快速啟動 (30 秒)
-
----
-
-### Jetson 端
-
-## 🚀 安裝步驟
+### Jetson 端（無人機機載）
 
 ```bash
-
-### 1️⃣ 克隆倉庫# 1. 進入工作目錄並編譯 (首次)
-
-cd ~/uav-core && colcon build --merge-install
-
-```bash
-
-cd ~# 2. 載入環境
-
-git clone https://github.com/JackieLonger/uav-core.gitsource install/setup.bash
-
-cd uav-core
-
-```# 3. 啟動優化器
-
-ros2 run ros2_px4_offboard_example signal_optimizer_node_v3.py
-
-### 2️⃣ 安裝 ROS2 依賴```
-
-
-
-```bash### 筆電端 (監控)
-
-# 安裝 ROS2 Humble (如果未安裝)
-
-# 參考: https://docs.ros.org/en/humble/Installation.html```bash
-
-# 終端 1: 訊號掃描
-
-# 安裝 vcs 工具source ~/uav-core/install/setup.bash
-
-sudo apt install python3-vcstoolros2 run ros2_px4_offboard_example fast_scan_node.py
-
-
-
-# 拉取第三方依賴包# 終端 2: 監看無人機狀態
-
-vcs import src < thirdparty.reposros2 topic echo /drone_1/optimizer_status
-
-
-
-# 安裝 ROS2 依賴# 終端 3: 監看訊號歷史
-
-cd ~/uav-coreros2 topic echo /drone_1/signal_history
-
-rosdep install --from-paths src --ignore-src -r -y```
-
-```
-
----
-
-### 3️⃣ 安裝 Python 依賴
-
-## 📋 測試流程
-
-```bash
-
-# 地面站和 Jetson 都需要### 🎯 單機測試流程
-
-pip3 install meshtastic numpy scipy
-
-``````
-
-[Jetson 連接 Pixhawk]
-
-### 4️⃣ 編譯工作空間         ↓
-
-[啟動優化器節點]
-
-```bash         ↓
-
-cd ~/uav-core[檢查訊號接收]
-
-colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo         ↓
-
-```[自動 ARM 和起飛]
-
-         ↓
-
-### 5️⃣ 配置環境變量[在 3×3×3m 搜索最佳訊號點]
-
-         ↓
-
-```bash[30-90 秒後收斂]
-
-# 添加到 ~/.bashrc         ↓
-
-echo "source ~/uav-core/install/setup.bash" >> ~/.bashrc[進入 HOLD 模式停留]
-
-source ~/.bashrc```
-
-```
-
-**詳細步驟 → 參考 TESTING_GUIDE.md**
-
-### 6️⃣ Jetson 額外配置
-
-### 🚁 多機獨立測試流程 (推薦)
-
-```bash
-
-# 在每台 Jetson 上安裝 MicroXRCE-DDS Agent```
-
-# 參考: https://docs.px4.io/main/en/middleware/uxrce_dds.html[Jetson-1]  [Jetson-2]  [Jetson-3]
-
-     ↓           ↓            ↓
-
-# 或使用快速安裝腳本  [啟動]      [啟動]       [啟動]
-
-cd ~/uav-core     ↓           ↓            ↓
-
-./setup.sh  [搜索]      [搜索]       [搜索]
-
-```  空間1      空間2       空間3
-
-  
-
----完全獨立，無干擾 ✅
-
-```
-
-## ⚡ 快速啟動
-
-**詳細步驟 → 參考 TESTING_GUIDE.md**
-
-### Jetson 端（每台獨立啟動）
-
----
-
-```bash
-
-# Drone 1## ✅ 成功標誌
-
+# 1. 修改 fast_scan_node.py 中的 Tracker ID
+# 檔案路徑：src/ROS2_PX4_Offboard_Example/px4_offboard/fast_scan_node.py
+# 找到第 34-41 行配置區域，填入實際的 Tracker ID
+
+# 2. 編譯並啟動
 cd ~/uav-core
+colcon build --merge-install
+source install/setup.bash
+./launch_jetson.sh 1  # Drone 1（只需指定 drone_id）
+```
 
-./launch_jetson.sh 1 !tracker1A !tracker1B### 單機測試
+### 筆電端（地面站）
 
 ```bash
+# 終端 1: 啟動優化器
+cd ~/uav-core
+source install/setup.bash
+./launch_multi_drone_optimizer.sh
 
-# Drone 2# 預期輸出
-
-./launch_jetson.sh 2 !tracker2A !tracker2B[INFO] 🤖 Signal optimizer v3 ready | Drone: drone_1 | Mode: search
-
-[INFO] 🔋 Vehicle status: ARMING_STATE_STANDBY
-
-# Drone 3[INFO] 🚀 Armed successfully
-
-./launch_jetson.sh 3 !tracker3A !tracker3B[INFO] ✈️ Takeoff complete, starting search
-
-```[INFO] 📊 Evaluating signal... Score: 42.5
-
-# ... 繼續搜索 ...
-
-**注意**: 替換 `!tracker1A` 等為實際的 Meshtastic 節點 ID[INFO] 🎯 Convergence detected! Switching to HOLD mode
-
-[INFO] ⏸️ Holding position at (x, y, z)
-
-### 筆記本端（地面站）```
-
-
-
-```bash### 多機測試
-
-# 終端 1: 啟動優化器```bash
-
-cd ~/uav-core# 終端輸出 (多個無人機)
-
-./launch_multi_drone_optimizer.sh/drone_1/optimizer_status
-
-/drone_2/optimizer_status
-
-# 終端 2: 啟動 RViz2 可視化/drone_3/optimizer_status
-
+# 終端 2: 啟動 RViz2 可視化
+cd ~/uav-core
+source install/setup.bash
 ./launch_rviz.sh
-
-```# 各無人機位置不重疊，獨立收斂
-
 ```
 
-### 完整啟動流程
+---
+
+## 🧪 測試步驟
+
+### 情況 A：有真實硬體（推薦）
+
+1. **Jetson 端**：連接 Meshtastic 硬體，啟動 `./launch_jetson.sh 1`
+2. **筆電端**：啟動優化器和 RViz
+3. **觀察日誌**：筆電端應顯示 "收到 Tracker 信號" 和 "移動 x/5"
+
+### 情況 B：無硬體測試（代碼驗證）
+
+1. **Jetson 端**：手動發送模擬數據
+   ```bash
+   # 循環發送模擬訊號
+   while true; do
+     ros2 topic pub --once /drone_1/link_quality std_msgs/msg/String \
+       "data: '{\"target_id\": \"!TEST_A\", \"status\": \"Success\", \"forward_rssi\": -80, \"forward_snr\": 10, \"return_rssi\": -85, \"return_snr\": 8, \"timestamp\": \"123456\"}'"
+     sleep 1
+     ros2 topic pub --once /drone_1/link_quality std_msgs/msg/String \
+       "data: '{\"target_id\": \"!TEST_B\", \"status\": \"Success\", \"forward_rssi\": -75, \"forward_snr\": 12, \"return_rssi\": -78, \"return_snr\": 11, \"timestamp\": \"123456\"}'"
+     sleep 2
+   done
+   ```
+
+2. **筆電端**：啟動優化器，觀察是否收到並處理數據
+
+**詳細測試指南**：請參考 `DYNAMIC_TRACKER_TEST_GUIDE.md` 和 `DUAL_TERMINAL_TEST_GUIDE.md`
 
 ---
 
-詳見 **[QUICK_START.md](QUICK_START.md)** 中的 5 步驟說明
+## 📋 系統需求
 
-## 🆘 常見問題
+### 硬體需求
 
----
+**無人機端（每台）**：
+- Jetson Orin Nano (8GB 推薦)
+- Pixhawk 6C 飛控
+- Meshtastic Heltec Tracker V3 × 2（綁定專屬）
+- GPS 模組（3D Fix）
+- 電源系統
 
-| 問題 | 解決方案 |
+**地面站**：
+- 筆記本電腦（Ubuntu 22.04）
+- WiFi 連接（與 Jetson 同網段）
 
-## 📊 主要功能|------|--------|
+**地面 Tracker**：
+- Meshtastic Heltec Tracker V3 × 6（固定位置）
 
-| **無法接收訊號** | 檢查 Meshtastic 是否配置；查看 `/link_quality` 話題 |
+### 軟體需求
 
-### 1. 訊號掃描 (`fast_scan_node.py`)| **無法 ARM** | 檢查 PX4 狀態；查看電池電量 |
-
-- 每 2 秒掃描綁定的 Meshtastic Tracker| **無人機不動** | 檢查 OffboardControlMode 和速度命令是否發送 |
-
-- 發布 `/drone_N/link_quality` 話題（RSSI + SNR）| **多機位置重疊** | 調整 `search_bounds_x/y/z` 參數；或分別在不同位置起飛 |
-
-- 支援參數化配置 Tracker ID
-
-**詳細故障排查 → 參考 TESTING_GUIDE.md**
-
-### 2. 訊號優化 (`multi_drone_signal_optimizer.py`)
-
-- 多線程異步決策（每機獨立線程）---
-
-- 梯度上升算法（優先 Z 軸 → XY 平面）
-
-- RSSI/SNR 綜合評分（各佔 50%）## 📚 文檔導航
-
-- 自適應步長（0.1m ~ 0.5m）
-
-- 3m × 3m × 3m 搜索空間- **TESTING_GUIDE.md** ⭐ - 完整測試邏輯和流程 (必讀!)
-
-- **QUICK_REFERENCE.md** - ROS2 快速命令參考
-
-### 3. 速度控制 (`velocity_control.py`)- **JETSON_DEPLOYMENT_GUIDE_FINAL.md** - Jetson 部署詳細步驟
-
-- 轉換優化器速度指令為 PX4 格式- **FINAL_BUILD_REPORT.md** - 編譯驗證報告
-
-- ARK Electronics 速度控制接口
-
-- 100Hz 高頻發布---
-
-
-
-### 4. 可視化 (`multi_drone_visualizer.py`)## 📝 每次修改後
-
-- RViz2 MarkerArray 顯示
-
-- 即時訊號質量（顏色編碼）```bash
-
-- 飛行軌跡歷史cd ~/uav-core
-
-- 每機獨立搜索邊界
-
-- Tracker 綁定資訊顯示# 1. 重新編譯
-
-colcon build --merge-install
+**Jetson & 筆電（兩端都需安裝）**：
+- Ubuntu 22.04 LTS
+- ROS2 Humble
+- Python 3.10+
+- PX4 v1.14.3
+- Meshtastic Python CLI
 
 ---
 
-# 2. 重新載入
+## 🛠️ 安裝步驟
 
-## 🎨 RViz2 可視化說明source install/setup.bash
+### 1. Clone 專案
 
-
-
-啟動 `./launch_rviz.sh` 後可看到：# 3. 重新啟動
-
-ros2 run ros2_px4_offboard_example signal_optimizer_node_v3.py
-
-| 元素 | 說明 |```
-
-|------|------|
-
-| 🟢 綠色球體 | 訊號質量良好（Q > 0.5） |---
-
-| 🟡 黃色球體 | 訊號質量中等（Q ≈ 0.5） |
-
-| 🔴 紅色球體 | 訊號質量差（Q < 0.5） |## 🎓 核心概念
-
-| 🟦 青色框 | Drone 1 搜索邊界 |
-
-| 🟪 洋紅框 | Drone 2 搜索邊界 || 概念 | 說明 |
-
-| 🟨 黃色框 | Drone 3 搜索邊界 ||------|------|
-
-| 📝 文本標籤 | 顯示 Drone ID、質量分數、Tracker 綁定 || **訊號評分** | `Score = SNR × 0.7 + (RSSI / -50) × 100 × 0.3` |
-
-| ➡️ 黃色箭頭 | 當前速度向量 || **3×3×3m 搜索** | 每個無人機在 (±1.5m X/Y, 0~3m Z) 範圍內搜索 |
-
-| 🔵 藍色軌跡 | 歷史飛行路徑（最近 100 點） || **雙 Tracker** | 優化器等待兩個信號源都提供數據後再決策 |
-
-| **收斂判定** | 連續 5 次 (可配置) 無改進就進入 HOLD 模式 |
-
----| **HOLD 模式** | 無人機停留在最佳點，零速度命令 |
-
-
-
-## 🧪 測試流程---
-
-
-
-### 單機測試（5 分鐘）
-參考 **[SINGLE_MACHINE_TESTING.md](SINGLE_MACHINE_TESTING.md)**
-
-### 多機測試（15 分鐘）
-參考 **[MULTI_DRONE_OPTIMIZER_GUIDE.md](MULTI_DRONE_OPTIMIZER_GUIDE.md)** 第 3 節
-
----
-
-## 🔧 參數配置
-
-### Jetson Launch 參數
-
-```python
-# jetson_onboard.launch.py
-drone_id: int          # 無人機編號 (1, 2, 3)
-tracker_a_id: str      # Tracker A 的 Meshtastic ID
-tracker_b_id: str      # Tracker B 的 Meshtastic ID
-```
-
-### 優化器參數
-
-```python
-# multi_drone_optimizer.launch.py
-num_drones: int        # 無人機數量 (預設: 3)
-drone_ids: list        # 無人機 ID 列表 (預設: [1, 2, 3])
-search_bounds_x: float # X 軸搜索範圍 (預設: 1.5m)
-search_bounds_y: float # Y 軸搜索範圍 (預設: 1.5m)
-search_bounds_z: float # Z 軸搜索範圍 (預設: 3.0m)
-step_size: float       # 移動步長 (預設: 0.2m)
-```
-
-詳細參數說明見 **[MULTI_DRONE_OPTIMIZER_GUIDE.md](MULTI_DRONE_OPTIMIZER_GUIDE.md)** 第 5 節
-
----
-
-## 🆘 常見問題
-
-### Q1: 編譯時找不到 px4_msgs
 ```bash
-# 解決方法：確保已拉取依賴
+cd ~
+git clone --recursive https://github.com/JackieLonger/uav-core.git
+cd uav-core
+```
+
+### 2. 安裝 ROS2 依賴
+
+```bash
+# 安裝 PX4 消息定義
 vcs import src < thirdparty.repos
+
+# 安裝 Python 依賴
+pip3 install meshtastic pyserial
+
+# 編譯
 colcon build --merge-install
 ```
 
-### Q2: Jetson 連接不上 Pixhawk
+### 3. 配置 Tracker ID（僅 Jetson 端）
+
+編輯 `src/ROS2_PX4_Offboard_Example/px4_offboard/fast_scan_node.py`：
+
+```python
+# 第 34-41 行
+TRACKER_A_ID = "!實際的TrackerA_ID"  # ← 修改這裡
+TRACKER_B_ID = "!實際的TrackerB_ID"  # ← 修改這裡
+```
+
+查詢 Tracker ID：
 ```bash
-# 檢查串口權限
-sudo usermod -aG dialout $USER
-sudo chmod 666 /dev/ttyUSB0
-
-# 檢查 MicroXRCE Agent
-ps aux | grep MicroXRCEAgent
+meshtastic --info
+# 查看 "User ID" 欄位（格式：!xxxxxxxx）
 ```
 
-### Q3: RViz2 看不到無人機
+### 4. 重新編譯
+
 ```bash
-# 檢查話題
-ros2 topic list | grep drone
-
-# 檢查網路連接（地面站和 Jetson 需在同一網段）
-ping [Jetson IP]
+colcon build --merge-install
+source install/setup.bash
 ```
 
-### Q4: 無人機不移動
+---
+
+## 📊 核心參數
+
+| 參數 | 值 | 說明 |
+|------|-----|------|
+| **MAX_MOVEMENTS** | 5 | 最大移動次數 |
+| **MAX_VELOCITY** | 0.3 m/s | 最大速度限制 |
+| **ALTITUDE_THRESHOLD** | 1.5 m | 優先上升高度 |
+| **BOUNDS_X** | ±1.5 m | X 軸邊界（相對起飛點）|
+| **BOUNDS_Y** | ±1.5 m | Y 軸邊界（相對起飛點）|
+| **BOUNDS_Z** | +3.0 m | Z 軸上限（只能上升）|
+| **PUBLISH_RATE** | 100 Hz | 速度指令發布頻率 |
+
+---
+
+## 🚨 安全機制
+
+1. **RC Override**: 遙控器隨時可切換回手動模式（PX4 內建）
+2. **Failsafe 監控**: 失聯/電量低自動觸發 RTL
+3. **邊界保護**: 超出 3m × 3m × 3m 空間自動停止
+4. **速度限制**: 最大速度 0.3 m/s
+5. **懸停機制**: 移動 3 秒後自動歸零速度
+
+---
+
+## 📝 核心檔案說明
+
+### Python 節點
+
+| 檔案 | 位置 | 功能 | 運行端 |
+|------|------|------|--------|
+| `fast_scan_node.py` | `px4_offboard/` | 掃描 Meshtastic Tracker | Jetson |
+| `velocity_control.py` | `px4_offboard/` | 速度控制（Twist → PX4）| Jetson |
+| `multi_drone_signal_optimizer.py` | `px4_offboard/` | 多機優化決策中心 | 筆電 |
+| `multi_drone_visualizer.py` | `px4_offboard/` | RViz2 可視化 | 筆電 |
+
+### Launch 腳本
+
+| 腳本 | 功能 |
+|------|------|
+| `launch_jetson.sh` | Jetson 端啟動腳本 |
+| `launch_multi_drone_optimizer.sh` | 筆電端優化器啟動 |
+| `launch_rviz.sh` | RViz2 可視化啟動 |
+
+---
+
+## 🔧 常見問題排查
+
+### 問題 1：筆電端收不到 link_quality
+
+**檢查**：
 ```bash
-# 檢查 Offboard 模式
-ros2 topic echo /fmu/out/vehicle_status
+# 在筆電上
+ros2 topic list | grep link_quality
+# 應顯示：/drone_1/link_quality, /drone_2/link_quality, ...
 
-# 檢查速度命令
-ros2 topic echo /drone_1/offboard_velocity_cmd
+ros2 topic echo /drone_1/link_quality
+# 應有 JSON 格式數據
 ```
 
-更多問題見 **[MULTI_DRONE_OPTIMIZER_GUIDE.md](MULTI_DRONE_OPTIMIZER_GUIDE.md)** 第 6 節
+**原因**：
+- Jetson 未啟動或網路未連接
+- Tracker 未綁定或 ID 錯誤
+- ROS2 DDS 配置問題
 
----
+### 問題 2：無人機不懸停，持續移動
 
-## 📁 項目結構
+**立即處理**：用遙控器切回手動模式
 
-```
-uav-core/
-├── src/
-│   ├── ROS2_PX4_Offboard_Example/      # 主要 ROS2 套件
-│   │   ├── px4_offboard/               # Python 節點
-│   │   │   ├── fast_scan_node.py       # Meshtastic 掃描
-│   │   │   ├── multi_drone_signal_optimizer.py  # 優化器
-│   │   │   ├── multi_drone_visualizer.py       # 可視化
-│   │   │   └── velocity_control.py     # 速度控制
-│   │   ├── launch/                     # Launch 文件
-│   │   │   ├── jetson_onboard.launch.py
-│   │   │   └── multi_drone_optimizer.launch.py
-│   │   └── resource/                   # RViz 配置
-│   │       └── multi_drone.rviz
-│   ├── px4_msgs/                       # PX4 消息定義（子模組）
-│   └── px4_ros_com/                    # PX4-ROS2 橋接（子模組）
-├── launch_jetson.sh                    # Jetson 啟動腳本
-├── launch_multi_drone_optimizer.sh     # 地面站優化器啟動
-├── launch_rviz.sh                      # RViz2 啟動
-├── setup.sh                            # 環境設置腳本
-├── thirdparty.repos                    # 依賴倉庫列表
-├── QUICK_START.md                      # 快速開始指南
-├── MULTI_DRONE_OPTIMIZER_GUIDE.md      # 完整使用手冊
-├── SINGLE_MACHINE_TESTING.md           # 單機測試文檔
-└── README.md                           # 本文件
+**檢查**：
+```bash
+# 在 Jetson 上查看日誌
+journalctl -f | grep "移动完成"
+# 應看到 "移动完成，悬停等待下一轮扫描"
 ```
 
----
+**解決**：
+- 確認 Git commit `85d5aff` 是否正確拉取
+- 重新編譯
 
-## 🤝 貢獻指南
+### 問題 3：RViz2 看不到無人機
 
-歡迎提交 Issue 和 Pull Request！
-
-1. Fork 本倉庫
-2. 創建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 開啟 Pull Request
-
----
-
-## 📄 授權協議
-
-本項目採用 MIT 授權 - 詳見 [LICENSE](LICENSE) 文件
+**檢查**：
+- 確認 Jetson 端發布了 `/drone_N/fmu/out/vehicle_local_position`
+- 檢查 RViz 的 Fixed Frame 設置（應為 `map`）
+- 確認 `multi_drone_visualizer.py` 正常運行
 
 ---
 
-## 👥 作者
+## 📖 延伸閱讀
 
-**Jackie Longer** - [GitHub](https://github.com/JackieLonger)
-
----
-
-## 🙏 致謝
-
-- [PX4 Autopilot](https://px4.io/) - 開源飛控系統
-- [ROS2](https://www.ros.org/) - 機器人操作系統
-- [Meshtastic](https://meshtastic.org/) - LoRa 網狀網路通訊
-- [ARK Electronics](https://arkelectron.com/) - Pixhawk 6C 飛控硬體
+- [ROS2 官方文檔](https://docs.ros.org/en/humble/)
+- [PX4 開發指南](https://docs.px4.io/main/en/)
+- [Meshtastic Python API](https://meshtastic.org/docs/software/python/cli/)
 
 ---
 
-## 📞 聯繫方式
+## 👥 貢獻者
 
-- 🐛 Issues: [GitHub Issues](https://github.com/JackieLonger/uav-core/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/JackieLonger/uav-core/discussions)
+- **開發者**: JackieLonger
+- **測試團隊**: [待補充]
 
 ---
 
-**⚠️ 安全提示**: 
-- 請在安全的測試環境中操作無人機
-- 遵守當地無人機飛行法規
-- 確保有經驗的飛手在場
-- 保持安全距離
-- 隨時準備手動接管控制
+## 📄 License
+
+MIT License - 詳見 [LICENSE](LICENSE) 文件
+
+---
+
+**最後更新**: 2025-11-23  
+**版本**: v1.0 (Dynamic Tracker ID)
