@@ -14,13 +14,18 @@ RViz2 可视化节点 - 多无人机信号优化系统
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
-from geometry_msgs.msg import Twist, Point
-from std_msgs.msg import String, ColorRGBA
+from rclpy.executors import ExternalShutdownException
+from geometry_msgs.msg import Twist, Point, PoseStamped
+from std_msgs.msg import String, ColorRGBA, Header
 from px4_msgs.msg import VehicleLocalPosition
 from visualization_msgs.msg import Marker, MarkerArray
+from nav_msgs.msg import Path
 import json
 import math
+import time
+import csv
 from collections import deque
+from pathlib import Path as FilePath
 
 
 class MultiDroneVisualizer(Node):
@@ -29,26 +34,20 @@ class MultiDroneVisualizer(Node):
     def __init__(self):
         super().__init__('multi_drone_visualizer')
         
-        # 参数
+        # 参数 - 简化为只需要无人机数量
         self.declare_parameter('num_drones', 3)
         self.declare_parameter('drone_ids', [1, 2, 3])
-        self.declare_parameter('drone_tracker_bindings', {
-            '1': {'tracker_a': '!待設定1A', 'tracker_b': '!待設定1B'},
-            '2': {'tracker_a': '!待設定2A', 'tracker_b': '!待設定2B'},
-            '3': {'tracker_a': '!待設定3A', 'tracker_b': '!待設定3B'}
-        })
         
         drone_ids = self.get_parameter('drone_ids').value
-        drone_tracker_bindings = self.get_parameter('drone_tracker_bindings').value
         
         # 每架无人机的状态
         self.drone_states = {}
         for drone_id in drone_ids:
-            # 获取该无人机绑定的 Tracker
-            binding = drone_tracker_bindings.get(str(drone_id), {
-                'tracker_a': '!未設定',
-                'tracker_b': '!未設定'
-            })
+            # Tracker ID 由 optimizer 动态识别，这里不需要预设
+            binding = {
+                'tracker_a': '!動態識別',
+                'tracker_b': '!動態識別'
+            }
             
             self.drone_states[drone_id] = {
                 'position': Point(x=0.0, y=0.0, z=0.0),
@@ -58,6 +57,12 @@ class MultiDroneVisualizer(Node):
                 'takeoff_position': None,
                 'tracker_a_id': binding.get('tracker_a', '!未設定'),
                 'tracker_b_id': binding.get('tracker_b', '!未設定'),
+                # 信號歷史記錄（用於證明優化效果）
+                'quality_history': deque(maxlen=1000),  # 最多記錄1000個數據點
+                'rssi_history': deque(maxlen=1000),
+                'snr_history': deque(maxlen=1000),
+                'position_history': deque(maxlen=1000),
+                'timestamp_history': deque(maxlen=1000),
             }
         
         self.get_logger().info(f"可视化器启动，绑定信息：")
@@ -105,6 +110,20 @@ class MultiDroneVisualizer(Node):
             10
         )
         
+        # 發布每架無人機的軌跡 Path
+        self.path_pubs = {}
+        for drone_id in drone_ids:
+            self.path_pubs[drone_id] = self.create_publisher(
+                Path,
+                f'/drone_{drone_id}/path',
+                10
+            )
+        
+        # 創建日誌目錄用於保存信號歷史
+        self.log_dir = FilePath.home() / 'uav-core' / 'signal_logs'
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.get_logger().info(f"信號日誌將保存到: {self.log_dir}")
+        
         # 定时发布可视化
         self.timer = self.create_timer(
             0.1,  # 10Hz
@@ -115,15 +134,55 @@ class MultiDroneVisualizer(Node):
         self.get_logger().info(f"多无人机可视化器启动（{len(drone_ids)} 架）")
     
     def position_callback(self, msg: VehicleLocalPosition, drone_id: int):
-        """接收位置数据"""
+        """接收位置数据 (NED → ENU 座標轉換)"""
         state = self.drone_states[drone_id]
-        pos = Point(x=msg.x, y=msg.y, z=msg.z)
+        
+        # NED to ENU 座標轉換 (參考 visualizer.py)
+        # NED: X=North, Y=East, Z=Down
+        # ENU: X=East, Y=North, Z=Up
+        # 轉換: ENU_X = NED_X, ENU_Y = -NED_Y, ENU_Z = -NED_Z
+        pos = Point(
+            x=msg.x,      # X 保持不變 (North → East in RViz)
+            y=-msg.y,     # Y 反轉 (East → -North in RViz)
+            z=-msg.z      # Z 反轉 (Down → Up in RViz)
+        )
+        
         state['position'] = pos
         state['trajectory'].append(pos)
         
         # 记录起飞位置
         if state['takeoff_position'] is None:
             state['takeoff_position'] = pos
+            self.get_logger().info(f'Drone {drone_id} 起飛位置: ({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})')
+        
+        # 記錄位置歷史 (使用 ENU 座標)
+        timestamp = time.time()
+        state['position_history'].append([pos.x, pos.y, pos.z])
+        state['timestamp_history'].append(timestamp)
+        
+        # 調試輸出 (前3個位置)
+        if len(state['position_history']) <= 3:
+            self.get_logger().info(
+                f'Drone {drone_id} 位置 #{len(state["position_history"])}: '
+                f'NED({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) → '
+                f'ENU({pos.x:.1f}, {pos.y:.1f}, {pos.z:.1f})'
+            )
+        
+        # 發布軌跡 (Path message for RViz2)
+        path_msg = Path()
+        path_msg.header = Header()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = "map"
+        
+        # 從軌跡創建 Path
+        for p in state['trajectory']:
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position = p
+            pose.pose.orientation.w = 1.0  # Identity quaternion
+            path_msg.poses.append(pose)
+        
+        self.path_pubs[drone_id].publish(path_msg)
     
     def quality_callback(self, msg: String, drone_id: int):
         """接收信号质量数据"""
@@ -156,6 +215,16 @@ class MultiDroneVisualizer(Node):
                     state['quality'] = quality
                 else:
                     state['quality'] = (state['quality'] + quality) / 2.0
+                
+                # 記錄信號質量歷史
+                timestamp = time.time()
+                state['quality_history'].append(quality)
+                state['rssi_history'].append(rssi_avg)
+                state['snr_history'].append(snr_avg)
+                
+                # 調試輸出
+                if len(state['quality_history']) <= 3:
+                    self.get_logger().info(f'Drone {drone_id} 信號記錄 #{len(state["quality_history"])}: Q={quality:.2f}, RSSI={rssi_avg:.1f}, SNR={snr_avg:.1f}')
                 
         except Exception as e:
             self.get_logger().error(f"质量回调错误: {e}")
@@ -263,19 +332,20 @@ class MultiDroneVisualizer(Node):
                 
                 takeoff = state['takeoff_position']
                 
-                # 定义立方体的 8 个顶点（相对于 takeoff_position）
-                # NED: x前, y右, z下
+                # 定义立方体的 8 个顶点（ENU 座標系）
+                # takeoff 已經是 ENU 座標 (在 position_callback 中轉換)
+                # ENU: X=East, Y=North, Z=Up
                 vertices = [
-                    # 底部 4 个顶点（z = takeoff.z，起飞高度）
+                    # 底部 4 个顶点（z = takeoff.z，起飛高度）
                     Point(x=takeoff.x - 1.5, y=takeoff.y - 1.5, z=takeoff.z),
                     Point(x=takeoff.x + 1.5, y=takeoff.y - 1.5, z=takeoff.z),
                     Point(x=takeoff.x + 1.5, y=takeoff.y + 1.5, z=takeoff.z),
                     Point(x=takeoff.x - 1.5, y=takeoff.y + 1.5, z=takeoff.z),
-                    # 顶部 4 个顶点（z = takeoff.z - 3.0，上升3m）
-                    Point(x=takeoff.x - 1.5, y=takeoff.y - 1.5, z=takeoff.z - 3.0),
-                    Point(x=takeoff.x + 1.5, y=takeoff.y - 1.5, z=takeoff.z - 3.0),
-                    Point(x=takeoff.x + 1.5, y=takeoff.y + 1.5, z=takeoff.z - 3.0),
-                    Point(x=takeoff.x - 1.5, y=takeoff.y + 1.5, z=takeoff.z - 3.0),
+                    # 顶部 4 个顶点（z = takeoff.z + 3.0，向上 3 米）
+                    Point(x=takeoff.x - 1.5, y=takeoff.y - 1.5, z=takeoff.z + 3.0),
+                    Point(x=takeoff.x + 1.5, y=takeoff.y - 1.5, z=takeoff.z + 3.0),
+                    Point(x=takeoff.x + 1.5, y=takeoff.y + 1.5, z=takeoff.z + 3.0),
+                    Point(x=takeoff.x - 1.5, y=takeoff.y + 1.5, z=takeoff.z + 3.0),
                 ]
                 
                 # 定义立方体的 12 条边（每条边需要 2 个点）
@@ -392,6 +462,63 @@ class MultiDroneVisualizer(Node):
         
         color.a = 0.8
         return color
+    
+    def save_signal_history(self):
+        """保存信號質量歷史到 CSV"""
+        try:
+            print(f"\n[DEBUG] 開始保存信號歷史...")
+            for drone_id, state in self.drone_states.items():
+                print(f"[DEBUG] Drone {drone_id}: {len(state['timestamp_history'])} 個時間戳, {len(state['quality_history'])} 個質量數據")
+                
+                # 檢查是否有數據
+                if len(state['timestamp_history']) == 0:
+                    print(f"[DEBUG] Drone {drone_id} 沒有數據，跳過")
+                    continue
+                
+                # 生成文件名
+                timestamp_str = time.strftime('%Y%m%d_%H%M%S')
+                filename = self.log_dir / f'signal_log_drone{drone_id}_{timestamp_str}.csv'
+                print(f"[DEBUG] 保存到: {filename}")
+                
+                # 寫入 CSV
+                with open(filename, 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    
+                    # 表頭
+                    writer.writerow([
+                        'timestamp', 'drone_id', 'quality', 'rssi', 'snr', 
+                        'pos_x', 'pos_y', 'pos_z'
+                    ])
+                    
+                    # 數據行
+                    for i in range(len(state['timestamp_history'])):
+                        timestamp = state['timestamp_history'][i]
+                        quality = state['quality_history'][i] if i < len(state['quality_history']) else 0.0
+                        rssi = state['rssi_history'][i] if i < len(state['rssi_history']) else 0.0
+                        snr = state['snr_history'][i] if i < len(state['snr_history']) else 0.0
+                        
+                        if i < len(state['position_history']):
+                            pos = state['position_history'][i]
+                            pos_x, pos_y, pos_z = pos[0], pos[1], pos[2]
+                        else:
+                            pos_x, pos_y, pos_z = 0.0, 0.0, 0.0
+                        
+                        writer.writerow([
+                            timestamp, drone_id, quality, rssi, snr,
+                            pos_x, pos_y, pos_z
+                        ])
+                
+                self.get_logger().info(f'信號歷史已保存: {filename}')
+                
+        except Exception as e:
+            self.get_logger().error(f'保存信號歷史失敗: {e}')
+    
+    def __del__(self):
+        """析構函數 - 節點關閉時保存數據"""
+        try:
+            self.save_signal_history()
+        except:
+            pass  # 避免析構時出錯
 
 
 def main(args=None):
@@ -400,11 +527,28 @@ def main(args=None):
     
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info("可视化器关闭")
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常關閉
+    except Exception as e:
+        print(f"Error: {e}")
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # 保存信號歷史
+        try:
+            node.get_logger().info("可视化器关闭")
+            node.save_signal_history()
+        except:
+            pass
+        
+        try:
+            node.destroy_node()
+        except:
+            pass
+        
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except:
+            pass
 
 
 if __name__ == '__main__':

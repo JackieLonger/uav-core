@@ -11,15 +11,12 @@
 
 ## 📚 核心文檔
 
-| 文檔 | 用途 | 時間 |
-|------|------|------|
-| **README.md** | 項目總覽與快速入門 | 10 分鐘 |
-| **QUICK_START.md** | 快速命令參考 | 5 分鐘 |
-| **DYNAMIC_TRACKER_TEST_GUIDE.md** | 動態 Tracker ID 測試 | 15 分鐘 |
-| **DUAL_TERMINAL_TEST_GUIDE.md** | 雙終端測試流程 | 20 分鐘 |
-| **MULTI_DRONE_OPTIMIZER_GUIDE.md** | 多機優化器詳細手冊 | 30 分鐘 |
-| **FINAL_EXPERIMENT_CONFIRMATION.md** | 實驗前檢查清單 | 10 分鐘 |
-| **ROS2_TOPIC_FLOW.md** | Topic 訂閱關係圖 | 10 分鐘 |
+| 文檔 | 用途 | 閱讀時間 |
+|------|------|---------|
+| **README.md** | 📖 項目總覽與快速入門 | 10 分鐘 |
+| **LAUNCH_SCRIPTS_GUIDE.md** | � 啟動腳本完整指南（實際部署必讀） | 15 分鐘 |
+| **BOUNDARY_LIMIT_EXPLANATION.md** | 🛡️ 邊界限制與安全機制說明 | 10 分鐘 |
+| **ROS2_TOPIC_FLOW.md** | 📡 ROS2 Topic 訂閱關係與系統架構 | 10 分鐘 |
 
 ---
 
@@ -48,7 +45,7 @@
 │  │  - RViz2 可視化                                           │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-         ↕ (WiFi/ROS2 DDS)
+         ↕ (WiFi 網路 / ROS2 Topic 通訊)
 ┌─────────────────────┐              ┌─────────────────────────┐
 │  Jetson N (機載)    │              │  Pixhawk 6C (飛控)      │
 │  - fast_scan_node   │◄────────────►│  - PX4 v1.14.3          │
@@ -69,64 +66,53 @@
 
 ---
 
-## ⚡ 快速啟動命令
+## ⚡ 快速啟動
 
-### Jetson 端（無人機機載）
+### 📱 Jetson 端（無人機機載）
 
+**前置準備**：修改 `fast_scan_node.py` 中的 Tracker ID
 ```bash
-# 1. 修改 fast_scan_node.py 中的 Tracker ID
-# 檔案路徑：src/ROS2_PX4_Offboard_Example/px4_offboard/fast_scan_node.py
-# 找到第 34-41 行配置區域，填入實際的 Tracker ID
+# 編輯：src/ROS2_PX4_Offboard_Example/px4_offboard/fast_scan_node.py
+# 第 34-41 行配置區域，填入實際的 Tracker ID
 
-# 2. 編譯並啟動
+# 編譯並啟動
 cd ~/uav-core
 colcon build --merge-install
 source install/setup.bash
-./launch_jetson.sh 1  # Drone 1（只需指定 drone_id）
+./launch_jetson_simple.sh 1  # Drone 1
 ```
 
-### 筆電端（地面站）
+### 💻 筆電端（地面站）
 
 ```bash
-# 終端 1: 啟動優化器
+# 啟動優化器 + 視覺化 + RViz2
 cd ~/uav-core
 source install/setup.bash
-./launch_multi_drone_optimizer.sh
+./launch_laptop.sh
 
-# 終端 2: 啟動 RViz2 可視化
-cd ~/uav-core
-source install/setup.bash
-./launch_rviz.sh
+# 選擇選項 3：同時啟動優化器和視覺化（推薦）
+```
+
+**純 RViz2 測試**：
+```bash
+# 測試軌跡顯示功能（不需要真實硬體）
+./test_rviz.sh
 ```
 
 ---
 
-## 🧪 測試步驟
+## 🎨 RViz2 視覺化
 
-### 情況 A：有真實硬體（推薦）
+啟動後可在 RViz2 中看到：
+- 🔴🟢🔵 **無人機球體**：顏色根據信號質量變化（紅→黃→綠）
+- 🟧🟩🟦 **飛行軌跡**：Path 顯示每架無人機的移動軌跡
+- 📦 **邊界框**：青色框線顯示每架無人機的飛行範圍（±1.5m × ±1.5m × 0-3m）
+- 🏷️ **信號數據**：每架無人機顯示實時 RSSI、SNR 和質量分數
 
-1. **Jetson 端**：連接 Meshtastic 硬體，啟動 `./launch_jetson.sh 1`
-2. **筆電端**：啟動優化器和 RViz
-3. **觀察日誌**：筆電端應顯示 "收到 Tracker 信號" 和 "移動 x/5"
-
-### 情況 B：無硬體測試（代碼驗證）
-
-1. **Jetson 端**：手動發送模擬數據
-   ```bash
-   # 循環發送模擬訊號
-   while true; do
-     ros2 topic pub --once /drone_1/link_quality std_msgs/msg/String \
-       "data: '{\"target_id\": \"!TEST_A\", \"status\": \"Success\", \"forward_rssi\": -80, \"forward_snr\": 10, \"return_rssi\": -85, \"return_snr\": 8, \"timestamp\": \"123456\"}'"
-     sleep 1
-     ros2 topic pub --once /drone_1/link_quality std_msgs/msg/String \
-       "data: '{\"target_id\": \"!TEST_B\", \"status\": \"Success\", \"forward_rssi\": -75, \"forward_snr\": 12, \"return_rssi\": -78, \"return_snr\": 11, \"timestamp\": \"123456\"}'"
-     sleep 2
-   done
-   ```
-
-2. **筆電端**：啟動優化器，觀察是否收到並處理數據
-
-**詳細測試指南**：請參考 `DYNAMIC_TRACKER_TEST_GUIDE.md` 和 `DUAL_TERMINAL_TEST_GUIDE.md`
+**信號歷史記錄**：
+- 關閉視覺化器時自動保存 CSV 檔案
+- 檔案名：`drone_N_signal_history_YYYYMMDD_HHMMSS.csv`
+- 包含：時間戳、訊號質量、RSSI、SNR、位置等數據
 
 ---
 
@@ -237,20 +223,18 @@ source install/setup.bash
 
 | 檔案 | 功能 | 運行端 |
 |------|------|--------|
-| `fast_scan_node.py` | 掃描 Meshtastic Tracker | Jetson |
-| `velocity_control.py` | 速度控制（Twist → PX4）| Jetson |
+| `fast_scan_node.py` | 掃描 Meshtastic Tracker 信號 | Jetson |
+| `velocity_control.py` | 速度控制（Twist → PX4 軌跡）| Jetson |
 | `multi_drone_signal_optimizer.py` | 多機優化決策中心 | 筆電 |
-| `multi_drone_visualizer.py` | RViz2 可視化 | 筆電 |
-| `control.py` | 鍵盤手動控制（選用）| Jetson/筆電 |
-| `processes.py` | 輔助啟動腳本（選用）| 筆電 |
+| `multi_drone_visualizer.py` | RViz2 可視化 + 信號記錄 | 筆電 |
 
-### Launch 腳本
+### 啟動腳本
 
-| 腳本 | 功能 |
-|------|------|
-| `launch_jetson.sh` | Jetson 端啟動腳本 |
-| `launch_multi_drone_optimizer.sh` | 筆電端優化器啟動 |
-| `launch_rviz.sh` | RViz2 可視化啟動 |
+| 腳本 | 功能 | 使用端 |
+|------|------|--------|
+| `launch_laptop.sh` | 筆電端統一啟動器（4 種模式） | 筆電 |
+| `launch_jetson_simple.sh` | Jetson 端統一啟動器 | Jetson |
+| `test_rviz.sh` | RViz2 測試腳本（無需硬體） | 筆電 |
 
 ---
 
@@ -268,47 +252,82 @@ ros2 topic echo /drone_1/link_quality
 # 應有 JSON 格式數據
 ```
 
-**原因**：
-- Jetson 未啟動或網路未連接
-- Tracker 未綁定或 ID 錯誤
-- ROS2 DDS 配置問題
+**原因與解決**：
+- Jetson 未啟動或網路未連接 → 檢查 WiFi 同網段
+- Tracker 未綁定或 ID 錯誤 → 修改 `fast_scan_node.py` 的 ID
+- ROS2 網路問題 → 確認 `ROS_DOMAIN_ID` 一致（預設為 0）
 
-### 問題 2：無人機不懸停，持續移動
-
-**立即處理**：用遙控器切回手動模式
+### 問題 2：RViz2 看不到無人機或軌跡
 
 **檢查**：
 ```bash
-# 在 Jetson 上查看日誌
-journalctl -f | grep "移动完成"
-# 應看到 "移动完成，悬停等待下一轮扫描"
+# 確認 topic 是否發布
+ros2 topic list | grep -E "vehicle_local_position|path"
+# 應看到：/drone_N/fmu/out/vehicle_local_position 和 /drone_N/path
+
+ros2 topic hz /drone_1/path
+# 應顯示更新頻率
 ```
 
 **解決**：
-- 確認 Git commit `85d5aff` 是否正確拉取
-- 重新編譯
+- 確保 `multi_drone_visualizer.py` 正在運行
+- 檢查 RViz2 配置檔案：`multi_drone.rviz`
+- 確認座標系 Fixed Frame 設為 `map`
 
-### 問題 3：RViz2 看不到無人機
+### 問題 3：無人機不懸停，持續移動
+
+**立即處理**：用遙控器切回手動模式！
+
+**原因**：
+- `velocity_control.py` 沒有收到速度命令時會保持懸停
+- 如果持續移動，可能是優化器異常
 
 **檢查**：
-- 確認 Jetson 端發布了 `/drone_N/fmu/out/vehicle_local_position`
-- 檢查 RViz 的 Fixed Frame 設置（應為 `map`）
-- 確認 `multi_drone_visualizer.py` 正常運行
+```bash
+# 在筆電上查看優化器狀態
+ros2 topic echo /drone_1/offboard_velocity_cmd
+# 懸停時應全為 0：linear: {x: 0.0, y: 0.0, z: 0.0}
+```
+
+---
+
+## 🛡️ 安全注意事項
+
+### 飛行前檢查
+- ✅ 確認所有 Jetson 端 Tracker ID 已正確配置
+- ✅ 檢查 ROS2 網路連接（筆電能 ping 通所有 Jetson）
+- ✅ 確認遙控器電量充足，可隨時接管
+- ✅ 測試 RC Override 功能正常
+- ✅ 檢查邊界設定符合飛行場地
+
+### 飛行中監控
+- 📊 實時觀察 RViz2 中的無人機位置和信號
+- 🎮 遙控器隨時準備切換到手動模式
+- 📡 監控 `/drone_N/offboard_velocity_cmd` topic
+- 🔋 注意電池電量和飛行時間
+
+### 緊急處理
+1. **立即切回手動模式**（最高優先）
+2. 手動降落到安全位置
+3. 檢查日誌找出問題原因
+4. 修正後重新測試
 
 ---
 
 ## 📖 延伸閱讀
 
+- [LAUNCH_SCRIPTS_GUIDE.md](LAUNCH_SCRIPTS_GUIDE.md) - 啟動腳本詳細說明
+- [BOUNDARY_LIMIT_EXPLANATION.md](BOUNDARY_LIMIT_EXPLANATION.md) - 邊界限制機制
+- [ROS2_TOPIC_FLOW.md](ROS2_TOPIC_FLOW.md) - ROS2 Topic 架構
 - [ROS2 官方文檔](https://docs.ros.org/en/humble/)
 - [PX4 開發指南](https://docs.px4.io/main/en/)
 - [Meshtastic Python API](https://meshtastic.org/docs/software/python/cli/)
 
 ---
 
-## 👥 貢獻者
+## � 授權
 
-- **開發者**: JackieLonger
-- **測試團隊**: [待補充]
+本項目採用 MIT 授權條款。
 
 ---
 
