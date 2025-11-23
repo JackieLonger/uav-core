@@ -9,20 +9,17 @@
 
 ---
 
-## 📚 核心文檔 (按優先級)
+## 📚 核心文檔
 
-| 文檔 | 用途 | 讀者 | 時間 |
-|------|------|------|------|
-| **DYNAMIC_TRACKER_TEST_GUIDE.md** ⭐⭐⭐ | 動態 Tracker ID 測試指南 | **所有人 必讀** | 15 分鐘 |
-| **DUAL_TERMINAL_TEST_GUIDE.md** ⭐⭐⭐ | 雙終端測試完整流程 | **所有人 必讀** | 20 分鐘 |
-| **QUICK_START.md** ⭐⭐ | 快速命令參考 | 開發者 | 5 分鐘 |
-| **SINGLE_MACHINE_TESTING.md** ⭐⭐ | 單機測試指南 | 測試人員 | 15 分鐘 |
-| **MULTI_DRONE_OPTIMIZER_GUIDE.md** ⭐ | 多機優化器詳細手冊 | 高級用戶 | 30 分鐘 |
-| **FINAL_EXPERIMENT_CONFIRMATION.md** | 實驗確認檢查清單 | 飛行前檢查 | 10 分鐘 |
-| **BUG_FIX_AND_CONFIGURATION_CHANGES.md** | Bug 修復記錄 | 開發者 | 10 分鐘 |
-| **PROJECT_STRUCTURE.md** | 項目結構說明 | 維護者 | 10 分鐘 |
-| **ROS2_TOPIC_FLOW.md** | Topic 訂閱關係圖 | 調試人員 | 10 分鐘 |
-| **HOLD_MECHANISM_REFACTORING_CHINESE.md** | 懸停機制技術細節 | 開發者 | 20 分鐘 |
+| 文檔 | 用途 | 時間 |
+|------|------|------|
+| **README.md** | 項目總覽與快速入門 | 10 分鐘 |
+| **QUICK_START.md** | 快速命令參考 | 5 分鐘 |
+| **DYNAMIC_TRACKER_TEST_GUIDE.md** | 動態 Tracker ID 測試 | 15 分鐘 |
+| **DUAL_TERMINAL_TEST_GUIDE.md** | 雙終端測試流程 | 20 分鐘 |
+| **MULTI_DRONE_OPTIMIZER_GUIDE.md** | 多機優化器詳細手冊 | 30 分鐘 |
+| **FINAL_EXPERIMENT_CONFIRMATION.md** | 實驗前檢查清單 | 10 分鐘 |
+| **ROS2_TOPIC_FLOW.md** | Topic 訂閱關係圖 | 10 分鐘 |
 
 ---
 
@@ -238,12 +235,14 @@ source install/setup.bash
 
 ### Python 節點
 
-| 檔案 | 位置 | 功能 | 運行端 |
-|------|------|------|--------|
-| `fast_scan_node.py` | `px4_offboard/` | 掃描 Meshtastic Tracker | Jetson |
-| `velocity_control.py` | `px4_offboard/` | 速度控制（Twist → PX4）| Jetson |
-| `multi_drone_signal_optimizer.py` | `px4_offboard/` | 多機優化決策中心 | 筆電 |
-| `multi_drone_visualizer.py` | `px4_offboard/` | RViz2 可視化 | 筆電 |
+| 檔案 | 功能 | 運行端 |
+|------|------|--------|
+| `fast_scan_node.py` | 掃描 Meshtastic Tracker | Jetson |
+| `velocity_control.py` | 速度控制（Twist → PX4）| Jetson |
+| `multi_drone_signal_optimizer.py` | 多機優化決策中心 | 筆電 |
+| `multi_drone_visualizer.py` | RViz2 可視化 | 筆電 |
+| `control.py` | 鍵盤手動控制（選用）| Jetson/筆電 |
+| `processes.py` | 輔助啟動腳本（選用）| 筆電 |
 
 ### Launch 腳本
 
