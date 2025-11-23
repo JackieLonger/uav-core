@@ -3,9 +3,9 @@
 Jetson 机载节点启动文件
 
 用法（在每架无人机的 Jetson 上运行）：
-    ros2 launch px4_offboard jetson_onboard.launch.py drone_id:=1
-    ros2 launch px4_offboard jetson_onboard.launch.py drone_id:=2
-    ros2 launch px4_offboard jetson_onboard.launch.py drone_id:=3
+    ros2 launch ros2_px4_offboard_example jetson_onboard.launch.py drone_id:=1
+    ros2 launch ros2_px4_offboard_example jetson_onboard.launch.py drone_id:=2
+    ros2 launch ros2_px4_offboard_example jetson_onboard.launch.py drone_id:=3
 
 功能：
 - 启动 fast_scan_node（扫描 Meshtastic）
@@ -36,8 +36,8 @@ def generate_launch_description():
     # 1. fast_scan_node（扫描 Meshtastic）
     # 注意：Tracker ID 已在节点代码中硬编码
     fast_scan_node = Node(
-        package='px4_offboard',
-        executable='fast_scan',
+        package='ros2_px4_offboard_example',
+        executable='fast_scan_node.py',
         name=['fast_scan_drone_', drone_id],
         output='screen',
         emulate_tty=True,
@@ -51,8 +51,8 @@ def generate_launch_description():
     
     # 2. velocity_control（速度控制）
     velocity_control_node = Node(
-        package='px4_offboard',
-        executable='velocity_control',
+        package='ros2_px4_offboard_example',
+        executable='velocity_control.py',
         name=['velocity_control_drone_', drone_id],
         output='screen',
         emulate_tty=True,
