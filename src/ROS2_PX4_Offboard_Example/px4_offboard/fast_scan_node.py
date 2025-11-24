@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # 快速掃描節點 - 定期掃描 Meshtastic LoRa 節點並記錄連線品質
-# 修正版：解決無法掃描第二個節點的問題
+# 修正版：解決無法掃描第二個節點的問題 + 解決端口衝突問題
 
 import rclpy
 from rclpy.node import Node
@@ -13,6 +13,10 @@ import time, threading
 from datetime import datetime
 from meshtastic.protobuf import mesh_pb2, portnums_pb2
 import json, math
+
+# 增加 Meshtastic 连接超时时间（从默认 20 秒增加到 60 秒）
+import meshtastic.util
+meshtastic.util.Timeout.__init__.__defaults__ = (60,)  # 设置默认超时为 60 秒
 
 # LoRa 參數設置
 LORA_BW_HZ = 125000
@@ -50,10 +54,14 @@ class FastScanNode(Node):
         self.interface = None
         self.scanning = False
         self.scan_count = 0
+        # 直接绑定到 /dev/ttyACM0 (Heltec Wireless Tracker)
+        self.meshtastic_port = '/dev/ttyACM0'
         pub.subscribe(self.onReceive, "meshtastic.receive")
+        
         self.timer = self.create_timer(PROBE_INTERVAL + 2, self.timer_callback, callback_group=self.callback_group)
         self.get_logger().info(f"FastScanNode 啟動，綁定 Tracker: {self.target_node_ids}")
-
+        self.get_logger().info(f"使用 Meshtastic 端口: {self.meshtastic_port} (固定綁定)")
+    
     def onReceive(self, packet, interface):
         try:
             port = packet.get('decoded', {}).get('portnum')
@@ -169,7 +177,7 @@ class FastScanNode(Node):
         self.scan_count += 1
         self.get_logger().info(f"\n{'='*60}\n開始第 {self.scan_count} 輪掃描\n{'='*60}")
         
-        # 每輪開始時重新初始化接口，確保狀態清潔
+        # 每輪開始時重新初始化接口，確保狀態清潔（原始邏輯，100%成功率）
         if self.interface:
             try:
                 self.interface.close()
@@ -181,7 +189,7 @@ class FastScanNode(Node):
         
         if not self.interface:
             try:
-                self.interface = meshtastic.serial_interface.SerialInterface()
+                self.interface = meshtastic.serial_interface.SerialInterface(devPath=self.meshtastic_port)
                 self.get_logger().info("✓ Meshtastic interface 重新啟動")
                 time.sleep(1)  # 等待 1 秒讓接口穩定
             except Exception as e:
