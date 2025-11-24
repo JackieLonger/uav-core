@@ -35,3 +35,4 @@ install_manifest.txt
 # 子模块（使用 thirdparty.repos 管理）
 src/px4_msgs/
 src/px4_ros_com/
+src/v1.14
