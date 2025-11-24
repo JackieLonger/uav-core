@@ -18,7 +18,7 @@ Jetson 机载节点启动文件
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
 
@@ -64,8 +64,32 @@ def generate_launch_description():
         }]
     )
     
+    # 3. Topic relay - 将 PX4 数据重映射为带 drone_id 的版本
+    # 使用 ExecuteProcess 运行 ros2 topic relay 命令
+    relay_position = ExecuteProcess(
+        cmd=[
+            'ros2', 'topic', 'relay',
+            '/fmu/out/vehicle_local_position',
+            ['/drone_', drone_id, '/fmu/out/vehicle_local_position']
+        ],
+        output='screen',
+        shell=False
+    )
+    
+    relay_status = ExecuteProcess(
+        cmd=[
+            'ros2', 'topic', 'relay',
+            '/fmu/out/vehicle_status',
+            ['/drone_', drone_id, '/fmu/out/vehicle_status']
+        ],
+        output='screen',
+        shell=False
+    )
+    
     return LaunchDescription([
         drone_id_arg,
         fast_scan_node,
         velocity_control_node,
+        relay_position,
+        relay_status,
     ])

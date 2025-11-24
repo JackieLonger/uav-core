@@ -16,7 +16,7 @@ config/local.yaml
 *.pyc
 *.pyo
 *.egg-info/
-
+*.env
 # ROS2 编译产物
 compile_commands.json
 *.cmake

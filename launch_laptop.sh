@@ -51,7 +51,8 @@ case $choice in
         
         # 啟動 RViz2
         echo "啟動 RViz2..."
-        rviz2 -d src/ROS2_PX4_Offboard_Example/config/multi_drone.rviz
+        unset GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR LOCPATH
+        /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz
         
         # 當 RViz2 關閉時，也關閉 visualizer
         kill $VISUALIZER_PID 2>/dev/null
@@ -74,7 +75,8 @@ case $choice in
         sleep 2
         
         # 啟動 RViz2（前景）
-        rviz2 -d src/ROS2_PX4_Offboard_Example/config/multi_drone.rviz
+        unset GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR LOCPATH
+        /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz
         
         # 當 RViz2 關閉時，清理所有進程
         echo "關閉所有進程..."
@@ -84,7 +86,8 @@ case $choice in
     4)
         echo ""
         echo "啟動 RViz2..."
-        rviz2 -d src/ROS2_PX4_Offboard_Example/config/multi_drone.rviz
+        unset GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR LOCPATH
+        /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz
         ;;
     *)
         echo "無效的選項"
