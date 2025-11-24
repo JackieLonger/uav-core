@@ -18,31 +18,26 @@ Jetson 机载节点启动文件
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.substitutions import LaunchConfiguration, TextSubstitution
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
-    # 声明参数
-    drone_id_arg = DeclareLaunchArgument(
-        'drone_id',
-        default_value='1',
-        description='无人机编号（1, 2, 3, ...）'
-    )
+def launch_setup(context, *args, **kwargs):
+    """动态生成 launch actions（在运行时解析 LaunchConfiguration）"""
     
-    drone_id = LaunchConfiguration('drone_id')
+    # 获取 drone_id 的实际值
+    drone_id = LaunchConfiguration('drone_id').perform(context)
     
     # 1. fast_scan_node（扫描 Meshtastic）
-    # 注意：Tracker ID 已在节点代码中硬编码
     fast_scan_node = Node(
         package='ros2_px4_offboard_example',
         executable='fast_scan_node.py',
-        name=['fast_scan_drone_', drone_id],
+        name=f'fast_scan_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
         remappings=[
-            ('link_quality', ['/drone_', drone_id, '/link_quality'])
+            ('link_quality', f'/drone_{drone_id}/link_quality')
         ],
         parameters=[{
             'use_sim_time': False,
@@ -53,43 +48,55 @@ def generate_launch_description():
     velocity_control_node = Node(
         package='ros2_px4_offboard_example',
         executable='velocity_control.py',
-        name=['velocity_control_drone_', drone_id],
+        name=f'velocity_control_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
         remappings=[
-            ('offboard_velocity_cmd', ['/drone_', drone_id, '/offboard_velocity_cmd'])
+            ('offboard_velocity_cmd', f'/drone_{drone_id}/offboard_velocity_cmd')
         ],
         parameters=[{
             'use_sim_time': False
         }]
     )
     
-    # 3. Topic relay - 将 PX4 数据重映射为带 drone_id 的版本
-    # 使用 ExecuteProcess 运行 ros2 topic relay 命令
+    # 3. Topic relay - 位置数据
     relay_position = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'relay',
             '/fmu/out/vehicle_local_position',
-            ['/drone_', drone_id, '/fmu/out/vehicle_local_position']
+            f'/drone_{drone_id}/fmu/out/vehicle_local_position'
         ],
         output='screen',
         shell=False
     )
     
+    # 4. Topic relay - 状态数据
     relay_status = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'relay',
             '/fmu/out/vehicle_status',
-            ['/drone_', drone_id, '/fmu/out/vehicle_status']
+            f'/drone_{drone_id}/fmu/out/vehicle_status'
         ],
         output='screen',
         shell=False
     )
     
-    return LaunchDescription([
-        drone_id_arg,
+    return [
         fast_scan_node,
         velocity_control_node,
         relay_position,
         relay_status,
+    ]
+
+
+def generate_launch_description():
+    drone_id_arg = DeclareLaunchArgument(
+        'drone_id',
+        default_value='1',
+        description='无人机编号（1, 2, 3, ...）'
+    )
+    
+    return LaunchDescription([
+        drone_id_arg,
+        OpaqueFunction(function=launch_setup)
     ])
