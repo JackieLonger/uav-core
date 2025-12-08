@@ -59,7 +59,8 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
-    # 3. Topic relay - 位置数据
+    # 3. Topic relay - 位置數據（使用官方 ros2 topic relay）
+    # 需要先安裝: sudo apt install ros-humble-topic-tools
     relay_position = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'relay',
@@ -70,7 +71,7 @@ def launch_setup(context, *args, **kwargs):
         shell=False
     )
     
-    # 4. Topic relay - 状态数据
+    # 4. Topic relay - 狀態數據
     relay_status = ExecuteProcess(
         cmd=[
             'ros2', 'topic', 'relay',

@@ -55,11 +55,20 @@ class OffboardControl(Node):
 
     def __init__(self):
         super().__init__('minimal_publisher')
-        qos_profile = QoSProfile(
+        # PX4 使用的 QoS（用於 PX4 topics）
+        px4_qos_profile = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
+        )
+        
+        # Optimizer 使用的 QoS（用於接收速度指令）
+        cmd_qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
         )
 
         #Create subscriptions
@@ -67,32 +76,32 @@ class OffboardControl(Node):
             VehicleStatus,
             '/fmu/out/vehicle_status',
             self.vehicle_status_callback,
-            qos_profile)
+            px4_qos_profile)
         
-        # ✅ 使用相對 topic 名稱（無前導斜線），這樣 launch 的 remapping 才能生效
+        # ✅ 使用相對 topic 名稱 + 匹配的 QoS
         self.offboard_velocity_sub = self.create_subscription(
             Twist,
             'offboard_velocity_cmd',  # 相對名稱，允許 remapping 到 /drone_X/offboard_velocity_cmd
             self.offboard_velocity_callback,
-            qos_profile)
+            cmd_qos_profile)  # 使用與 optimizer 匹配的 QoS
         
         self.attitude_sub = self.create_subscription(
             VehicleAttitude,
             '/fmu/out/vehicle_attitude',
             self.attitude_callback,
-            qos_profile)
+            px4_qos_profile)
         
         self.my_bool_sub = self.create_subscription(
             Bool,
             '/arm_message',
             self.arm_message_callback,
-            qos_profile)
+            px4_qos_profile)
 
 
         #Create publishers
-        self.publisher_offboard_mode = self.create_publisher(OffboardControlMode, '/fmu/in/offboard_control_mode', qos_profile)
-        self.publisher_velocity = self.create_publisher(Twist, '/fmu/in/setpoint_velocity/cmd_vel_unstamped', qos_profile)
-        self.publisher_trajectory = self.create_publisher(TrajectorySetpoint, '/fmu/in/trajectory_setpoint', qos_profile)
+        self.publisher_offboard_mode = self.create_publisher(OffboardControlMode, '/fmu/in/offboard_control_mode', px4_qos_profile)
+        self.publisher_velocity = self.create_publisher(Twist, '/fmu/in/setpoint_velocity/cmd_vel_unstamped', px4_qos_profile)
+        self.publisher_trajectory = self.create_publisher(TrajectorySetpoint, '/fmu/in/trajectory_setpoint', px4_qos_profile)
         self.vehicle_command_publisher_ = self.create_publisher(VehicleCommand, "/fmu/in/vehicle_command", 10)
 
         

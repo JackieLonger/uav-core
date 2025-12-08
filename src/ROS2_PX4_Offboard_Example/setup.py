@@ -39,7 +39,7 @@ setup(
                 # ===== Meshtastic 信號優化系統 =====
                 'fast_scan = px4_offboard.fast_scan_node:main',
                 'multi_drone_signal_optimizer = px4_offboard.multi_drone_signal_optimizer:main',
-                'multi_drone_visualizer = px4_offboard.multi_drone_visualizer:main'
+                'multi_drone_visualizer = px4_offboard.multi_drone_visualizer:main',
         ],
     },
 )
