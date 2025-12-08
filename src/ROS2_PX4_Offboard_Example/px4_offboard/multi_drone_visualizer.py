@@ -144,12 +144,25 @@ class MultiDroneVisualizer(Node):
         #   ENU_X = NED_Y (East)
         #   ENU_Y = NED_X (North)
         #   ENU_Z = -NED_Z (Up = -Down)
+        
+        # 修正：如果多台無人機重疊，可能是因為它們的相對位置沒有正確反映
+        # 假設每台無人機的 local_position 都是相對於它自己的起飛點 (0,0,0)
+        # 我們需要加上它們的初始偏移量（如果有的話）
+        # 但在實際實驗中，我們通常希望看到它們相對於起飛點的移動
+        
         pos = Point(
             x=msg.y,      # ENU_X = NED_Y (East)
             y=msg.x,      # ENU_Y = NED_X (North)
             z=-msg.z      # ENU_Z = -NED_Z (Up)
         )
         
+        # 如果是第一台無人機，保持原點
+        # 如果是第二台，手動偏移顯示（僅用於視覺化區分，不影響控制）
+        if drone_id == 2:
+            pos.x += 2.0  # 向東偏移 2 米
+        elif drone_id == 3:
+            pos.x -= 2.0  # 向西偏移 2 米
+            
         state['position'] = pos
         state['trajectory'].append(pos)
         

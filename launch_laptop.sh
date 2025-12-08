@@ -34,17 +34,45 @@ case $choice in
     1)
         echo ""
         echo "啟動多無人機信號優化器..."
-        echo "訂閱話題: /drone_1/link_quality, /drone_2/link_quality, /drone_3/link_quality"
-        echo "發布話題: /drone_1/offboard_velocity_cmd, /drone_2/offboard_velocity_cmd, /drone_3/offboard_velocity_cmd"
+        read -p "請輸入要控制的無人機 ID (逗號分隔，例: 1,2,3 或 1): " drone_input
+        
+        # 轉換輸入為陣列
+        IFS=',' read -ra DRONE_ARRAY <<< "$drone_input"
+        DRONE_IDS="["
+        for i in "${!DRONE_ARRAY[@]}"; do
+            DRONE_IDS="${DRONE_IDS}${DRONE_ARRAY[$i]}"
+            if [ $i -lt $((${#DRONE_ARRAY[@]} - 1)) ]; then
+                DRONE_IDS="${DRONE_IDS}, "
+            fi
+        done
+        DRONE_IDS="${DRONE_IDS}]"
+        
         echo ""
-        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py
+        echo "無人機 ID: $DRONE_IDS"
+        echo ""
+        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py --ros-args -p drone_ids:="$DRONE_IDS"
         ;;
     2)
         echo ""
         echo "啟動視覺化系統..."
+        read -p "請輸入要可視化的無人機 ID (逗號分隔，例: 1,2,3 或 1): " drone_input
+        
+        # 轉換輸入為陣列
+        IFS=',' read -ra DRONE_ARRAY <<< "$drone_input"
+        DRONE_IDS="["
+        for i in "${!DRONE_ARRAY[@]}"; do
+            DRONE_IDS="${DRONE_IDS}${DRONE_ARRAY[$i]}"
+            if [ $i -lt $((${#DRONE_ARRAY[@]} - 1)) ]; then
+                DRONE_IDS="${DRONE_IDS}, "
+            fi
+        done
+        DRONE_IDS="${DRONE_IDS}]"
+        
+        echo ""
+        echo "無人機 ID: $DRONE_IDS"
         echo ""
         # 在背景啟動 visualizer
-        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py &
+        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py --ros-args -p drone_ids:="$DRONE_IDS" &
         VISUALIZER_PID=$!
         
         sleep 2
@@ -60,16 +88,31 @@ case $choice in
     3)
         echo ""
         echo "同時啟動優化器和視覺化..."
+        read -p "請輸入要控制的無人機 ID (逗號分隔，例: 1,2,3 或 1): " drone_input
+        
+        # 轉換輸入為陣列
+        IFS=',' read -ra DRONE_ARRAY <<< "$drone_input"
+        DRONE_IDS="["
+        for i in "${!DRONE_ARRAY[@]}"; do
+            DRONE_IDS="${DRONE_IDS}${DRONE_ARRAY[$i]}"
+            if [ $i -lt $((${#DRONE_ARRAY[@]} - 1)) ]; then
+                DRONE_IDS="${DRONE_IDS}, "
+            fi
+        done
+        DRONE_IDS="${DRONE_IDS}]"
+        
+        echo ""
+        echo "無人機 ID: $DRONE_IDS"
         echo ""
         
         # 啟動優化器（背景）
-        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py &
+        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py --ros-args -p drone_ids:="$DRONE_IDS" &
         OPTIMIZER_PID=$!
         
         sleep 2
         
         # 啟動 visualizer（背景）
-        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py &
+        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py --ros-args -p drone_ids:="$DRONE_IDS" &
         VISUALIZER_PID=$!
         
         sleep 2

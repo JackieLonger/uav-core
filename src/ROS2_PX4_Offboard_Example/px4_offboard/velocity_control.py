@@ -173,9 +173,16 @@ class OffboardControl(Node):
                 if(not(self.flightCheck)):
                     self.current_state = "IDLE"
                     self.get_logger().info(f"Loiter, Flight Check Failed")
+                elif(self.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LOITER and self.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_TAKEOFF):
+                    # User interrupted takeoff/loiter sequence (e.g. switched to Position)
+                    self.current_state = "IDLE"
+                    self.get_logger().info(f"Loiter, User Interrupted (nav_state={self.nav_state}) -> IDLE")
                 elif(self.nav_state == VehicleStatus.NAVIGATION_STATE_AUTO_LOITER):
                     self.current_state = "OFFBOARD"
                     self.get_logger().info(f"Loiter, Offboard")
+                elif(self.myCnt > 50):
+                    self.get_logger().warning("LOITER超时，强制进入OFFBOARD")
+                    self.current_state = "OFFBOARD"
                 self.arm()
 
             case "OFFBOARD":
@@ -205,8 +212,8 @@ class OffboardControl(Node):
 
     # Takes off the vehicle to a user specified altitude (meters)
     def take_off(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF, param1 = 1.0, param7=5.0) # param7 is altitude in meters
-        self.get_logger().info("Takeoff command send")
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF, param1 = 1.0, param7=2.5) # param7 is altitude in meters (修改為 2.5m)
+        self.get_logger().info("Takeoff command send (Target Altitude: 2.5m)")
 
     #publishes command to /fmu/in/vehicle_command
     def publish_vehicle_command(self, command, param1=0.0, param2=0.0, param7=0.0):
@@ -243,13 +250,20 @@ class OffboardControl(Node):
         self.failsafe = msg.failsafe
         self.flightCheck = msg.pre_flight_checks_pass
         
-        # ✅ 偵測 RC 切換模式（遙控器接管）
+        # ✅ 偵測遙控器切入 Offboard 模式
         # NAVIGATION_STATE_OFFBOARD = 14
-        if self.offboardMode and msg.nav_state != 14:
+        if msg.nav_state == 14 and not self.offboardMode:
+            # 遙控器切入 Offboard，自動啟用控制
+            self.get_logger().info("✅ 偵測到 RC 切入 Offboard 模式，開始接收速度指令")
+            self.offboardMode = True
+            self.current_state = "OFFBOARD"  # 跳過狀態機
+        elif self.offboardMode and msg.nav_state != 14:
+            # RC 接管，停止 Offboard
             self.get_logger().warning(
                 f"偵測到模式切換 (nav_state={msg.nav_state})，RC 已接管，停止 Offboard"
             )
             self.offboardMode = False
+            self.current_state = "IDLE"
             self.velocity.x = 0.0
             self.velocity.y = 0.0
             self.velocity.z = 0.0

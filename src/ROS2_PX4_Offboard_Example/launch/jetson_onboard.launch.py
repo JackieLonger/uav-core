@@ -59,6 +59,12 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
+    # 2. porcesses（px4 connect to jetson）
+    processes_node = Node(
+        package='ros2_px4_offboard_example',
+        executable='processes.py',
+        name='processes_',
+    )
     # 3. Topic relay - 位置數據（使用官方 ros2 topic relay）
     # 需要先安裝: sudo apt install ros-humble-topic-tools
     relay_position = ExecuteProcess(

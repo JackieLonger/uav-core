@@ -199,6 +199,15 @@ class MultiDroneSignalOptimizer(Node):
     # 边界（相对于 takeoff_position）
     BOUNDS_X = (-1.5, 1.5)
     BOUNDS_Y = (-1.5, 1.5)
+    BOUNDS_Z = (0.0, 3.0)  # NED: 0.0(起飞点) 到 3.0(起飞点上方3米)
+    # 注意：NED 坐标系中，Z 轴向下为正。
+    # 如果 takeoff_position.z 是 -10m (海拔 10m)
+    # 我們希望飛到 -13m (海拔 13m)
+    # 所以相對高度應該是負值。
+    # 但這裡的邏輯是基於 current_altitude = takeoff_pos.z - current_pos.z
+    # current_altitude > 0 代表在起飛點上方
+    # 所以 BOUNDS_Z = (0.0, 3.0) 代表允許在起飛點上方 0~3 米範圍內移動
+    BOUNDS_Y = (-1.5, 1.5)
     BOUNDS_Z = (0.0, 3.0)  # 只能上升
     
     def __init__(self):
@@ -311,17 +320,21 @@ class MultiDroneSignalOptimizer(Node):
                 z=msg.z
             )
             
-            # 首次进入 Offboard 时记录起飞位置
-            if state.takeoff_position is None:
+            # 邏輯修正：
+            # 1. 如果還沒開始移動 (movement_count == 0)，持續更新起飛位置
+            #    這滿足「空中懸停切入」場景：切入前一直在懸停，位置就是原點
+            # 2. 如果是地面自動起飛，velocity_control 會先執行起飛
+            #    此時 movement_count 還是 0，直到 optimizer 發出第一個指令
+            #    所以我們需要一個標誌位來鎖定原點
+            
+            if state.takeoff_position is None or state.movement_count == 0:
                 state.takeoff_position = Position(
                     x=msg.x,
                     y=msg.y,
                     z=msg.z
                 )
-                self.get_logger().info(
-                    f"Drone {drone_id}: 记录起飞位置 "
-                    f"({msg.x:.2f}, {msg.y:.2f}, {msg.z:.2f})"
-                )
+                # 降低日誌頻率，只在位置變化大時打印
+                # self.get_logger().info(...)
     
     def calculate_velocity(self, drone_id: int) -> Tuple[float, float, float]:
         """
@@ -363,13 +376,20 @@ class MultiDroneSignalOptimizer(Node):
             vx, vy, vz = 0.0, 0.0, 0.0
             
             # === 策略 1: 优先上升到 1.5m ===
+            # 注意：如果是地面起飛，current_altitude 從 0 開始，會觸發上升
+            # 如果是空中懸停切入，takeoff_pos 就是當前高度，current_altitude ≈ 0，也會觸發上升
+            # 這符合需求：無論哪種方式，都以「原點」為基準向上搜索
             if current_altitude < self.ALTITUDE_THRESHOLD:
                 if improvement or previous_quality == 0.0:
                     # 信号改善或首次移动 → 正常上升
                     vz = -0.3  # NED: 负值 = 上升
+                    
+                    # 關鍵：一旦決定移動，movement_count 增加，takeoff_position 就會鎖定
+                    state.movement_count += 1
                 else:
                     # 信号变差但仍需上升 → 慢速上升
                     vz = -0.2
+                    state.movement_count += 1
                 
                 self.get_logger().info(
                     f"Drone {drone_id}: 上升中 ({current_altitude:.2f}m / {self.ALTITUDE_THRESHOLD}m), "
@@ -395,6 +415,7 @@ class MultiDroneSignalOptimizer(Node):
                         f"Drone {drone_id}: 信号改善，继续方向 "
                         f"({vx:.2f}, {vy:.2f}, {vz:.2f})"
                     )
+                    state.movement_count += 1
                 
                 else:
                     # 信号变差或无历史 → 随机 XY 搜索
@@ -409,6 +430,7 @@ class MultiDroneSignalOptimizer(Node):
                         f"Drone {drone_id}: 信号变差，随机搜索 "
                         f"({vx:.2f}, {vy:.2f}, {vz:.2f})"
                     )
+                    state.movement_count += 1
             
             # === 边界限制 ===
             vx, vy, vz = self.clamp_velocity(
