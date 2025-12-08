@@ -137,14 +137,17 @@ class MultiDroneVisualizer(Node):
         """接收位置数据 (NED → ENU 座標轉換)"""
         state = self.drone_states[drone_id]
         
-        # NED to ENU 座標轉換 (參考 visualizer.py)
+        # NED to ENU 座標轉換 (用於 RViz2 顯示)
         # NED: X=North, Y=East, Z=Down
         # ENU: X=East, Y=North, Z=Up
-        # 轉換: ENU_X = NED_X, ENU_Y = -NED_Y, ENU_Z = -NED_Z
+        # 正確轉換公式:
+        #   ENU_X = NED_Y (East)
+        #   ENU_Y = NED_X (North)
+        #   ENU_Z = -NED_Z (Up = -Down)
         pos = Point(
-            x=msg.x,      # X 保持不變 (North → East in RViz)
-            y=-msg.y,     # Y 反轉 (East → -North in RViz)
-            z=-msg.z      # Z 反轉 (Down → Up in RViz)
+            x=msg.y,      # ENU_X = NED_Y (East)
+            y=msg.x,      # ENU_Y = NED_X (North)
+            z=-msg.z      # ENU_Z = -NED_Z (Up)
         )
         
         state['position'] = pos

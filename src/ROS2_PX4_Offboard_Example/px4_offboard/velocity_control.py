@@ -69,9 +69,10 @@ class OffboardControl(Node):
             self.vehicle_status_callback,
             qos_profile)
         
+        # ✅ 使用相對 topic 名稱（無前導斜線），這樣 launch 的 remapping 才能生效
         self.offboard_velocity_sub = self.create_subscription(
             Twist,
-            '/offboard_velocity_cmd',
+            'offboard_velocity_cmd',  # 相對名稱，允許 remapping 到 /drone_X/offboard_velocity_cmd
             self.offboard_velocity_callback,
             qos_profile)
         
@@ -118,6 +119,10 @@ class OffboardControl(Node):
         self.failsafe = False
         self.current_state = "IDLE"
         self.last_state = self.current_state
+        
+        # 超時保護（防止 optimizer 崩潰後無人機繼續移動）
+        self.last_cmd_time = 0.0
+        self.cmd_timeout = 5.0  # 5 秒超時
 
 
     def arm_message_callback(self, msg):
@@ -228,19 +233,32 @@ class OffboardControl(Node):
         self.arm_state = msg.arming_state
         self.failsafe = msg.failsafe
         self.flightCheck = msg.pre_flight_checks_pass
+        
+        # ✅ 偵測 RC 切換模式（遙控器接管）
+        # NAVIGATION_STATE_OFFBOARD = 14
+        if self.offboardMode and msg.nav_state != 14:
+            self.get_logger().warning(
+                f"偵測到模式切換 (nav_state={msg.nav_state})，RC 已接管，停止 Offboard"
+            )
+            self.offboardMode = False
+            self.velocity.x = 0.0
+            self.velocity.y = 0.0
+            self.velocity.z = 0.0
 
 
-    #receives Twist commands from Teleop and converts NED -> FLU
+    #receives Twist commands - 直接使用 NED 座標（optimizer 發送的是 NED）
     def offboard_velocity_callback(self, msg):
-        #implements NED -> FLU Transformation
-        # X (FLU) is -Y (NED)
-        self.velocity.x = -msg.linear.y
-        # Y (FLU) is X (NED)
-        self.velocity.y = msg.linear.x
-        # Z (FLU) is -Z (NED)
-        self.velocity.z = -msg.linear.z
-        # A conversion for angular z is done in the attitude_callback function(it's the '-' in front of self.trueYaw)
+        import time
+        # ✅ 直接使用 NED 座標（不做 FLU 轉換）
+        # Optimizer 發送的已經是 NED 座標：
+        #   X = North, Y = East, Z = Down (正值=下降)
+        self.velocity.x = msg.linear.x  # NED North
+        self.velocity.y = msg.linear.y  # NED East  
+        self.velocity.z = msg.linear.z  # NED Down
         self.yaw = msg.angular.z
+        
+        # 記錄時間戳（用於超時保護）
+        self.last_cmd_time = time.time()
 
     #receives current trajectory values from drone and grabs the yaw value of the orientation
     def attitude_callback(self, msg):
@@ -253,6 +271,21 @@ class OffboardControl(Node):
     #publishes offboard control modes and velocity as trajectory setpoints
     def cmdloop_callback(self):
         if(self.offboardMode == True):
+            import time
+            
+            # ✅ 超時檢查（5 秒沒收到指令 → 自動懸停）
+            current_time = time.time()
+            if self.last_cmd_time > 0 and (current_time - self.last_cmd_time) > self.cmd_timeout:
+                self.get_logger().warning(
+                    f"速度指令超時 ({current_time - self.last_cmd_time:.1f}s)，自動懸停"
+                )
+                vx = vy = vz = vyaw = 0.0
+            else:
+                vx = self.velocity.x
+                vy = self.velocity.y
+                vz = self.velocity.z
+                vyaw = self.yaw
+            
             # Publish offboard control modes
             offboard_msg = OffboardControlMode()
             offboard_msg.timestamp = int(Clock().now().nanoseconds / 1000)
@@ -261,18 +294,13 @@ class OffboardControl(Node):
             offboard_msg.acceleration = False
             self.publisher_offboard_mode.publish(offboard_msg)            
 
-            # Compute velocity in the world frame
-            cos_yaw = np.cos(self.trueYaw)
-            sin_yaw = np.sin(self.trueYaw)
-            velocity_world_x = (self.velocity.x * cos_yaw - self.velocity.y * sin_yaw)
-            velocity_world_y = (self.velocity.x * sin_yaw + self.velocity.y * cos_yaw)
-
+            # ✅ 直接使用 NED 座標（移除旋轉矩陣，因為 optimizer 已經發送 NED）
             # Create and publish TrajectorySetpoint message with NaN values for position and acceleration
             trajectory_msg = TrajectorySetpoint()
             trajectory_msg.timestamp = int(Clock().now().nanoseconds / 1000)
-            trajectory_msg.velocity[0] = velocity_world_x
-            trajectory_msg.velocity[1] = velocity_world_y
-            trajectory_msg.velocity[2] = self.velocity.z
+            trajectory_msg.velocity[0] = vx  # NED North
+            trajectory_msg.velocity[1] = vy  # NED East
+            trajectory_msg.velocity[2] = vz  # NED Down
             trajectory_msg.position[0] = float('nan')
             trajectory_msg.position[1] = float('nan')
             trajectory_msg.position[2] = float('nan')
@@ -280,7 +308,7 @@ class OffboardControl(Node):
             trajectory_msg.acceleration[1] = float('nan')
             trajectory_msg.acceleration[2] = float('nan')
             trajectory_msg.yaw = float('nan')
-            trajectory_msg.yawspeed = self.yaw
+            trajectory_msg.yawspeed = vyaw
 
             self.publisher_trajectory.publish(trajectory_msg)
 
