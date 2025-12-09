@@ -293,10 +293,16 @@ class OffboardControl(Node):
         
     #publishes offboard control modes and velocity as trajectory setpoints
     def cmdloop_callback(self):
-        if(self.offboardMode == True):
-            import time
-            
-            # ✅ 超時檢查（5 秒沒收到指令 → 自動懸停）
+        import time
+        
+        # ✅ 關鍵修正：無條件發送 Setpoints（滿足 PX4 Offboard 切換前提條件）
+        # PX4 規定：切換到 Offboard 前必須已收到 > 2Hz 的控制指令
+        # 因此我們始終發送，不管當前是否在 Offboard 模式
+        
+        # 決定發送的速度值
+        if self.offboardMode:
+            # Offboard 模式：發送真實速度指令
+            # 超時檢查（5 秒沒收到指令 → 自動懸停）
             current_time = time.time()
             if self.last_cmd_time > 0 and (current_time - self.last_cmd_time) > self.cmd_timeout:
                 self.get_logger().warning(
@@ -308,32 +314,36 @@ class OffboardControl(Node):
                 vy = self.velocity.y
                 vz = self.velocity.z
                 vyaw = self.yaw
-            
-            # Publish offboard control modes
-            offboard_msg = OffboardControlMode()
-            offboard_msg.timestamp = int(Clock().now().nanoseconds / 1000)
-            offboard_msg.position = False
-            offboard_msg.velocity = True
-            offboard_msg.acceleration = False
-            self.publisher_offboard_mode.publish(offboard_msg)            
+        else:
+            # 非 Offboard 模式：發送懸停指令 (0,0,0)
+            # 這確保 PX4 隨時準備好接受切換，不會因為沒收到指令而拒絕
+            vx = vy = vz = vyaw = 0.0
+        
+        # ✅ 始終發送 OffboardControlMode（心跳包）
+        offboard_msg = OffboardControlMode()
+        offboard_msg.timestamp = int(Clock().now().nanoseconds / 1000)
+        offboard_msg.position = False
+        offboard_msg.velocity = True
+        offboard_msg.acceleration = False
+        self.publisher_offboard_mode.publish(offboard_msg)            
 
-            # ✅ 直接使用 NED 座標（移除旋轉矩陣，因為 optimizer 已經發送 NED）
-            # Create and publish TrajectorySetpoint message with NaN values for position and acceleration
-            trajectory_msg = TrajectorySetpoint()
-            trajectory_msg.timestamp = int(Clock().now().nanoseconds / 1000)
-            trajectory_msg.velocity[0] = vx  # NED North
-            trajectory_msg.velocity[1] = vy  # NED East
-            trajectory_msg.velocity[2] = vz  # NED Down
-            trajectory_msg.position[0] = float('nan')
-            trajectory_msg.position[1] = float('nan')
-            trajectory_msg.position[2] = float('nan')
-            trajectory_msg.acceleration[0] = float('nan')
-            trajectory_msg.acceleration[1] = float('nan')
-            trajectory_msg.acceleration[2] = float('nan')
-            trajectory_msg.yaw = float('nan')
-            trajectory_msg.yawspeed = vyaw
+        # ✅ 始終發送 TrajectorySetpoint
+        # 直接使用 NED 座標（optimizer 已經發送 NED）
+        trajectory_msg = TrajectorySetpoint()
+        trajectory_msg.timestamp = int(Clock().now().nanoseconds / 1000)
+        trajectory_msg.velocity[0] = vx  # NED North
+        trajectory_msg.velocity[1] = vy  # NED East
+        trajectory_msg.velocity[2] = vz  # NED Down
+        trajectory_msg.position[0] = float('nan')
+        trajectory_msg.position[1] = float('nan')
+        trajectory_msg.position[2] = float('nan')
+        trajectory_msg.acceleration[0] = float('nan')
+        trajectory_msg.acceleration[1] = float('nan')
+        trajectory_msg.acceleration[2] = float('nan')
+        trajectory_msg.yaw = float('nan')
+        trajectory_msg.yawspeed = vyaw
 
-            self.publisher_trajectory.publish(trajectory_msg)
+        self.publisher_trajectory.publish(trajectory_msg)
 
 
 def main(args=None):

@@ -193,13 +193,13 @@ class MultiDroneSignalOptimizer(Node):
     # 常量配置
     MAX_MOVEMENTS = 5
     MAX_VELOCITY = 0.3  # m/s
-    ALTITUDE_THRESHOLD = 1.5  # 优先上升到 1.5m
+    ALTITUDE_THRESHOLD = 0.2  # 初始上升閾值 (0.2m)，避免強制爬升太高
     PUBLISH_RATE = 100.0  # Hz (100Hz for PX4 Offboard)
     
     # 边界（相对于 takeoff_position）
     BOUNDS_X = (-1.5, 1.5)
     BOUNDS_Y = (-1.5, 1.5)
-    BOUNDS_Z = (0.0, 3.0)  # NED: 0.0(起飞点) 到 3.0(起飞点上方3米)
+    BOUNDS_Z = (0.0, 1.5)  # 允許在原點上方 0~1.5m 範圍內搜索
     # 注意：NED 坐标系中，Z 轴向下为正。
     # 如果 takeoff_position.z 是 -10m (海拔 10m)
     # 我們希望飛到 -13m (海拔 13m)
