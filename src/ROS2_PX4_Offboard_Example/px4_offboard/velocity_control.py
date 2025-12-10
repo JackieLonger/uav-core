@@ -46,6 +46,7 @@ from px4_msgs.msg import TrajectorySetpoint
 from px4_msgs.msg import VehicleStatus
 from px4_msgs.msg import VehicleAttitude
 from px4_msgs.msg import VehicleCommand
+from px4_msgs.msg import VehicleLocalPosition
 from geometry_msgs.msg import Twist, Vector3
 from math import pi
 from std_msgs.msg import Bool
@@ -76,6 +77,13 @@ class OffboardControl(Node):
             VehicleStatus,
             '/fmu/out/vehicle_status',
             self.vehicle_status_callback,
+            px4_qos_profile)
+        
+        # 訂閱本地位置（用於判斷高度）
+        self.position_sub = self.create_subscription(
+            VehicleLocalPosition,
+            '/fmu/out/vehicle_local_position',
+            self.position_callback,
             px4_qos_profile)
         
         # ✅ 使用相對 topic 名稱 + 匹配的 QoS
@@ -132,11 +140,30 @@ class OffboardControl(Node):
         # 超時保護（防止 optimizer 崩潰後無人機繼續移動）
         self.last_cmd_time = 0.0
         self.cmd_timeout = 5.0  # 5 秒超時
+        
+        # RC 切入 Offboard 標記（用於判斷是否需要自動起飛）
+        self.rc_offboard_entry = False
+        self.takeoff_altitude_reached = False
+        
+        # 當前高度（相對於地面，單位：米）
+        self.current_altitude = 0.0
+        self.ground_level_z = None  # 地面 Z 座標（NED 框架）
 
 
     def arm_message_callback(self, msg):
         self.arm_message = msg.data
         self.get_logger().info(f"Arm Message: {self.arm_message}")
+    
+    def position_callback(self, msg: VehicleLocalPosition):
+        """接收位置信息，計算當前高度"""
+        # 初始化地面參考點（第一次接收位置時）
+        if self.ground_level_z is None and msg.z != 0.0:
+            self.ground_level_z = msg.z
+            self.get_logger().info(f"地面參考點設定: Z = {self.ground_level_z:.2f}m (NED)")
+        
+        # 計算相對於地面的高度（NED: Z 向下為正，所以高度 = ground_z - current_z）
+        if self.ground_level_z is not None:
+            self.current_altitude = self.ground_level_z - msg.z
 
     #callback function that arms, takes off, and switches to offboard mode
     #implements a finite state machine
@@ -254,9 +281,23 @@ class OffboardControl(Node):
         # NAVIGATION_STATE_OFFBOARD = 14
         if msg.nav_state == 14 and not self.offboardMode:
             # 遙控器切入 Offboard，自動啟用控制
-            self.get_logger().info("✅ 偵測到 RC 切入 Offboard 模式，開始接收速度指令")
+            self.get_logger().info("✅ 偵測到 RC 切入 Offboard 模式")
             self.offboardMode = True
             self.current_state = "OFFBOARD"  # 跳過狀態機
+            self.rc_offboard_entry = True  # 標記為 RC 切入
+            
+            # 判斷是否需要起飛：如果當前高度 < 0.5m，認為在地面
+            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
+                if self.current_altitude < 0.5:
+                    self.get_logger().info(f"🚁 檢測到地面起飛 (高度: {self.current_altitude:.2f}m)，執行自動起飛至 2.5m")
+                    self.take_off()
+                    self.takeoff_altitude_reached = False
+                else:
+                    self.get_logger().info(f"✈️ 檢測到空中切入 (高度: {self.current_altitude:.2f}m)，當前位置將作為安全原點")
+                    self.takeoff_altitude_reached = True  # 已經在空中，不需要起飛
+            else:
+                self.get_logger().warning("⚠️ 無人機未解鎖，請先解鎖後再切入 Offboard")
+                
         elif self.offboardMode and msg.nav_state != 14:
             # RC 接管，停止 Offboard
             self.get_logger().warning(
@@ -264,6 +305,8 @@ class OffboardControl(Node):
             )
             self.offboardMode = False
             self.current_state = "IDLE"
+            self.rc_offboard_entry = False
+            self.takeoff_altitude_reached = False
             self.velocity.x = 0.0
             self.velocity.y = 0.0
             self.velocity.z = 0.0

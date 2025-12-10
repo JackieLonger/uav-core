@@ -48,18 +48,28 @@ class TrackerData:
     @property
     def quality_score(self) -> float:
         """综合质量评分（RSSI + SNR 各占 50%）"""
-        # RSSI 归一化 (-100 to -20 dBm)
-        rssi_avg = (self.forward_rssi + self.return_rssi) / 2.0
-        rssi_score = (rssi_avg + 100) / 80.0
-        rssi_score = max(0.0, min(1.0, rssi_score))
-        
-        # SNR 归一化 (-10 to 20 dB)
-        snr_avg = (self.forward_snr + self.return_snr) / 2.0
-        snr_score = (snr_avg + 10) / 30.0
-        snr_score = max(0.0, min(1.0, snr_score))
-        
-        # 综合评分
-        return 0.5 * rssi_score + 0.5 * snr_score
+        try:
+            # 确保 RSSI 和 SNR 是浮点数（可能从 JSON 来是字符串）
+            forward_rssi = float(self.forward_rssi) if self.forward_rssi else 0.0
+            return_rssi = float(self.return_rssi) if self.return_rssi else 0.0
+            forward_snr = float(self.forward_snr) if self.forward_snr else 0.0
+            return_snr = float(self.return_snr) if self.return_snr else 0.0
+            
+            # RSSI 归一化 (-100 to -20 dBm)
+            rssi_avg = (forward_rssi + return_rssi) / 2.0
+            rssi_score = (rssi_avg + 100) / 80.0
+            rssi_score = max(0.0, min(1.0, rssi_score))
+            
+            # SNR 归一化 (-10 to 20 dB)
+            snr_avg = (forward_snr + return_snr) / 2.0
+            snr_score = (snr_avg + 10) / 30.0
+            snr_score = max(0.0, min(1.0, snr_score))
+            
+            # 综合评分
+            return 0.5 * rssi_score + 0.5 * snr_score
+        except (ValueError, TypeError):
+            # 如果数据无效，返回 0
+            return 0.0
 
 
 @dataclass
@@ -143,8 +153,9 @@ class DroneState:
     def update_tracker_data(self, json_data: dict):
         """更新 tracker 数据（线程安全）"""
         with self.lock:
-            # 跳过失败的扫描
-            if json_data.get('status') != 'Success':
+            # 跳过失败或超時的掃描
+            status = json_data.get('status', 'Unknown')
+            if status not in ['Success']:
                 return
 
             target_id = json_data['target_id']
@@ -157,12 +168,19 @@ class DroneState:
             if target_id not in self.dynamic_tracker_ids:
                 return
             
+            # 安全地轉換 RSSI/SNR 為浮點數（可能是字符串或空值）
+            def safe_float(val):
+                try:
+                    return float(val) if val else 0.0
+                except (ValueError, TypeError):
+                    return 0.0
+            
             tracker_data = TrackerData(
                 target_id=target_id,
-                forward_rssi=json_data.get('forward_rssi', 0.0),
-                forward_snr=json_data.get('forward_snr', 0.0),
-                return_rssi=json_data.get('return_rssi', 0.0),
-                return_snr=json_data.get('return_snr', 0.0),
+                forward_rssi=safe_float(json_data.get('forward_rssi')),
+                forward_snr=safe_float(json_data.get('forward_snr')),
+                return_rssi=safe_float(json_data.get('return_rssi')),
+                return_snr=safe_float(json_data.get('return_snr')),
                 timestamp=json_data.get('timestamp', ''),
                 status=json_data.get('status', 'Unknown')
             )
@@ -171,7 +189,7 @@ class DroneState:
             self.tracker_ready_map[target_id] = True
     
     def calculate_current_quality(self) -> float:
-        """计算当前综合质量"""
+        """計算當前綜合質量（平均兩個 Tracker）"""
         with self.lock:
             if len(self.dynamic_tracker_ids) < 2:
                 return 0.0
@@ -180,11 +198,30 @@ class DroneState:
             if a_id not in self.tracker_data_map or b_id not in self.tracker_data_map:
                 return 0.0
             
-            quality_a = self.tracker_data_map[a_id].quality_score
-            quality_b = self.tracker_data_map[b_id].quality_score
+            # 獲取兩個 Tracker 的原始信號值
+            tracker_a = self.tracker_data_map[a_id]
+            tracker_b = self.tracker_data_map[b_id]
             
-            # 平均质量
-            return (quality_a + quality_b) / 2.0
+            # 平均 RSSI (來回平均)
+            rssi_avg = (tracker_a.forward_rssi + tracker_a.return_rssi + 
+                       tracker_b.forward_rssi + tracker_b.return_rssi) / 4.0
+            
+            # 平均 SNR (來回平均)
+            snr_avg = (tracker_a.forward_snr + tracker_a.return_snr + 
+                      tracker_b.forward_snr + tracker_b.return_snr) / 4.0
+            
+            # 歸一化 RSSI (-100 到 -20 dBm → 0 到 1)
+            rssi_score = (rssi_avg + 100) / 80.0
+            rssi_score = max(0.0, min(1.0, rssi_score))
+            
+            # 歸一化 SNR (-10 到 20 dB → 0 到 1)
+            snr_score = (snr_avg + 10) / 30.0
+            snr_score = max(0.0, min(1.0, snr_score))
+            
+            # 加權平均 (RSSI 60%, SNR 40%)
+            quality = 0.6 * rssi_score + 0.4 * snr_score
+            
+            return quality
 
 
 class MultiDroneSignalOptimizer(Node):
@@ -193,13 +230,13 @@ class MultiDroneSignalOptimizer(Node):
     # 常量配置
     MAX_MOVEMENTS = 5
     MAX_VELOCITY = 0.3  # m/s
-    ALTITUDE_THRESHOLD = 0.2  # 初始上升閾值 (0.2m)，避免強制爬升太高
+    ALTITUDE_THRESHOLD = 1.5  # 优先上升到 1.5m
     PUBLISH_RATE = 100.0  # Hz (100Hz for PX4 Offboard)
     
     # 边界（相对于 takeoff_position）
     BOUNDS_X = (-1.5, 1.5)
     BOUNDS_Y = (-1.5, 1.5)
-    BOUNDS_Z = (0.0, 1.5)  # 允許在原點上方 0~1.5m 範圍內搜索
+    BOUNDS_Z = (0.0, 3.0)  # NED: 0.0(起飞点) 到 3.0(起飞点上方3米)
     # 注意：NED 坐标系中，Z 轴向下为正。
     # 如果 takeoff_position.z 是 -10m (海拔 10m)
     # 我們希望飛到 -13m (海拔 13m)
