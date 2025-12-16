@@ -32,7 +32,7 @@ def launch_setup(context, *args, **kwargs):
     # 1. fast_scan_node（扫描 Meshtastic）
     fast_scan_node = Node(
         package='ros2_px4_offboard_example',
-        executable='fast_scan_node.py',
+        executable='fast_scan',
         name=f'fast_scan_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
@@ -48,7 +48,7 @@ def launch_setup(context, *args, **kwargs):
     # 2. velocity_control（速度控制）
     velocity_control_node = Node(
         package='ros2_px4_offboard_example',
-        executable='velocity_control.py',
+        executable='velocity_control',
         name=f'velocity_control_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
