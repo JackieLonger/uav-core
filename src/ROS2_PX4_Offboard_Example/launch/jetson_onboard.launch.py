@@ -65,7 +65,7 @@ def launch_setup(context, *args, **kwargs):
     # 3. processes 節點（連接 MicroXRCEAgent）
     processes_node = Node(
         package='ros2_px4_offboard_example',
-        executable='processes.py',
+        executable='processes',
         name='processes',
         output='screen',
         emulate_tty=True,
