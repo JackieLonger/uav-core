@@ -305,8 +305,8 @@ class KeyboardCommander:
         )
         self.keyboard_thread.start()
         
-        # 启动状态显示定时器（2秒刷新一次）
-        self.status_timer = self.create_timer(2.0, self._display_status)
+        # 启动状态显示定时器（5秒刷新一次，降低更新频率）
+        self.status_timer = self.create_timer(5.0, self._display_status)
         
         # 显示帮助信息
         print(self.HELP_MSG)
@@ -336,12 +336,16 @@ class KeyboardCommander:
                 if key:
                     self._handle_key(key)
             except Exception as e:
-                self.get_logger().error(f"键盘监听异常: {e}")
+                if self.keyboard_running:  # 只在正常运行时报错
+                    self.get_logger().error(f"键盘监听异常: {e}")
             time.sleep(0.05)
         
-        # 恢复终端设置
+        # 恢复终端设置（安全处理）
         if sys.platform != 'win32' and self.terminal_settings:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+            except Exception:
+                pass  # 忽略终端恢复错误
         
         self.get_logger().info("键盘监听线程退出")
     
@@ -902,11 +906,17 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
         if self.keyboard_thread:
             self.keyboard_thread.join(timeout=2.0)
         
-        # 恢复终端设置
+        # 恢复终端设置（安全处理）
         if sys.platform != 'win32' and self.terminal_settings:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+            except Exception:
+                pass  # 忽略终端恢复错误
         
-        Node.destroy_node(self)
+        try:
+            super().destroy_node()
+        except Exception:
+            pass
 
 
 def main(args=None):
@@ -924,7 +934,10 @@ def main(args=None):
         node.get_logger().info("收到中断信号")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # 忽略 shutdown 错误
 
 
 if __name__ == '__main__':

@@ -62,40 +62,13 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
-    # 2. porcesses（px4 connect to jetson）
-    processes_node = Node(
-        package='ros2_px4_offboard_example',
-        executable='processes.py',
-        name='processes_',
-    )
-    # 3. Topic relay - 位置數據（使用官方 ros2 topic relay）
-    # 需要先安裝: sudo apt install ros-humble-topic-tools
-    relay_position = ExecuteProcess(
-        cmd=[
-            'ros2', 'topic', 'relay',
-            '/fmu/out/vehicle_local_position',
-            f'/drone_{drone_id}/fmu/out/vehicle_local_position'
-        ],
-        output='screen',
-        shell=False
-    )
-    
-    # 4. Topic relay - 狀態數據
-    relay_status = ExecuteProcess(
-        cmd=[
-            'ros2', 'topic', 'relay',
-            '/fmu/out/vehicle_status',
-            f'/drone_{drone_id}/fmu/out/vehicle_status'
-        ],
-        output='screen',
-        shell=False
-    )
+    # 注意：ROS2 Humble 沒有 ros2 topic relay
+    # velocity_control 已經訂閱本地的 /fmu/... topics
+    # 位置數據由 velocity_control 內部處理，不需要 relay
     
     return [
         fast_scan_node,
         velocity_control_node,
-        relay_position,
-        relay_status,
     ]
 
 

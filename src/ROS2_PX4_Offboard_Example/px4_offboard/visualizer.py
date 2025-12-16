@@ -45,7 +45,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from px4_msgs.msg import VehicleAttitude
 from px4_msgs.msg import VehicleLocalPosition
-from px4_msgs.msg import TrajectorySetpoint
+fmrom px4_msgs.msg import TrajectorySetpoint
 from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker

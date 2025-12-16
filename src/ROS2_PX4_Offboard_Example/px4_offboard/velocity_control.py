@@ -132,7 +132,7 @@ class OffboardControl(Node):
         self.timer = self.create_timer(timer_period, self.cmdloop_callback)
 
         self.nav_state = VehicleStatus.NAVIGATION_STATE_MAX
-        self.arm_state = VehicleStatus.ARMING_STATE_ARMED
+        self.arm_state = VehicleStatus.ARMING_STATE_DISARMED  # 修正：初始為未解鎖
         self.velocity = Vector3()
         self.yaw = 0.0  #yaw value we send as command
         self.trueYaw = 0.0  #current yaw value of drone
