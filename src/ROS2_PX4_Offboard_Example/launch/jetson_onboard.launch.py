@@ -18,7 +18,7 @@ Jetson 机载节点启动文件
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -29,17 +29,10 @@ def launch_setup(context, *args, **kwargs):
     # 获取 drone_id 的实际值
     drone_id = LaunchConfiguration('drone_id').perform(context)
     
-    # 0. MicroXRCE-DDS Agent（連接 Pixhawk）
-    micro_xrce_agent = ExecuteProcess(
-        cmd=['MicroXRCEAgent', 'serial', '-D', '/dev/ttyUSB0', '-b', '921600'],
-        name='micro_xrce_agent',
-        output='screen',
-    )
-    
     # 1. fast_scan_node（扫描 Meshtastic）
     fast_scan_node = Node(
         package='ros2_px4_offboard_example',
-        executable='fast_scan',
+        executable='fast_scan_node.py',
         name=f'fast_scan_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
@@ -55,7 +48,7 @@ def launch_setup(context, *args, **kwargs):
     # 2. velocity_control（速度控制）
     velocity_control_node = Node(
         package='ros2_px4_offboard_example',
-        executable='velocity_control',
+        executable='velocity_control.py',
         name=f'velocity_control_drone_{drone_id}',
         output='screen',
         emulate_tty=True,
@@ -69,8 +62,20 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
+    # 2. processes（MicroXRCEAgent - PX4 連接 Jetson）
+    processes_node = Node(
+        package='ros2_px4_offboard_example',
+        executable='processes.py',
+        name='processes_',
+        output='screen',
+        emulate_tty=True,
+    )
+    
+    # 注意：ros2 topic relay 在 ROS2 Humble 中不存在
+    # 如需 topic 重映射，請使用 remappings 參數或在 Laptop 端訂閱原始 topic
+    
     return [
-        micro_xrce_agent,  # 先啟動 MicroXRCE-DDS Agent
+        processes_node,   # 先啟動 MicroXRCEAgent
         fast_scan_node,
         velocity_control_node,
     ]

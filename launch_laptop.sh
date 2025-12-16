@@ -48,7 +48,6 @@ case $choice in
         DRONE_IDS="${DRONE_IDS}]"
         
         echo ""
-        echo "啟動多無人機信號優化器..."
         echo "無人機 ID: $DRONE_IDS"
         echo ""
         ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py --ros-args -p drone_ids:="$DRONE_IDS"
@@ -70,7 +69,6 @@ case $choice in
         DRONE_IDS="${DRONE_IDS}]"
         
         echo ""
-        echo "啟動視覺化系統..."
         echo "無人機 ID: $DRONE_IDS"
         echo ""
         # 在背景啟動 visualizer
@@ -90,29 +88,43 @@ case $choice in
     3)
         echo ""
         echo "同時啟動優化器和視覺化..."
+        read -p "請輸入要控制的無人機 ID (逗號分隔，例: 1,2,3 或 1): " drone_input
+        
+        # 轉換輸入為陣列
+        IFS=',' read -ra DRONE_ARRAY <<< "$drone_input"
+        DRONE_IDS="["
+        for i in "${!DRONE_ARRAY[@]}"; do
+            DRONE_IDS="${DRONE_IDS}${DRONE_ARRAY[$i]}"
+            if [ $i -lt $((${#DRONE_ARRAY[@]} - 1)) ]; then
+                DRONE_IDS="${DRONE_IDS}, "
+            fi
+        done
+        DRONE_IDS="${DRONE_IDS}]"
+        
+        echo ""
+        echo "無人機 ID: $DRONE_IDS"
         echo ""
         
+        # 啟動優化器（背景）
+        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py --ros-args -p drone_ids:="$DRONE_IDS" &
+        OPTIMIZER_PID=$!
+        
+        sleep 2
+        
         # 啟動 visualizer（背景）
-        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py &
+        ros2 run ros2_px4_offboard_example multi_drone_visualizer.py --ros-args -p drone_ids:="$DRONE_IDS" &
         VISUALIZER_PID=$!
         
         sleep 2
         
-        # 啟動 RViz2（背景）
+        # 啟動 RViz2（前景）
         unset GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR LOCPATH
-        /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz &
-        RVIZ_PID=$!
+        /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz
         
-        sleep 5
-        
-        # 啟動優化器（前景 - 這樣才能接收鍵盤輸入）
-        echo "啟動優化器 (請在此視窗輸入鍵盤指令)..."
-        ros2 run ros2_px4_offboard_example multi_drone_signal_optimizer.py
-        
-        # 當優化器關閉時，清理所有進程
+        # 當 RViz2 關閉時，清理所有進程
         echo "關閉所有進程..."
+        kill $OPTIMIZER_PID 2>/dev/null
         kill $VISUALIZER_PID 2>/dev/null
-        kill $RVIZ_PID 2>/dev/null
         ;;
     4)
         echo ""

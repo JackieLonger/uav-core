@@ -251,24 +251,24 @@ class KeyboardCommander:
 ══════════════════════════════════════════════════════════════
 多无人机键盘控制台 - Multi-Drone Keyboard Commander
 ══════════════════════════════════════════════════════════════
-基本控制（自動化流程）：
-  SPACE  : 解锁 + 起飛 2.5m + 進入 Offboard 模式
-  L      : 降落（降落後自動上鎖）
-  H      : 紧急悬停（立即停止移动）
+🚁 飞行控制：
+  SPACE  : 🚀 自动起飞（ARM → TAKEOFF 2.5m → OFFBOARD）
+  L      : 🛬 降落并上锁
+  H      : ⏸️  紧急悬停（立即停止移动）
 
-扫描控制：
+📡 扫描控制：
   F      : 启动信号扫描（Fast Scan）
   G      : 停止信号扫描
 
-优化控制：
-  S      : 开始信号优化（默认已启用）
+🔍 优化控制：
+  S      : 开始信号优化
   P      : 暂停信号优化
 
-选择控制：
+✈️ 选择控制：
   1/2/3  : 选择单个无人机（Drone 1/2/3）
   A      : 选择所有无人机
 
-其他：
+⚙️ 其他：
   Q      : 退出程序
   ?      : 显示此帮助
 ══════════════════════════════════════════════════════════════
@@ -303,8 +303,8 @@ class KeyboardCommander:
         )
         self.keyboard_thread.start()
         
-        # 启动状态显示定时器（5秒刷新一次，降低更新频率）
-        self.status_timer = self.create_timer(5.0, self._display_status)
+        # 启动状态显示定时器（2秒刷新一次）
+        self.status_timer = self.create_timer(2.0, self._display_status)
         
         # 显示帮助信息
         print(self.HELP_MSG)
@@ -334,16 +334,12 @@ class KeyboardCommander:
                 if key:
                     self._handle_key(key)
             except Exception as e:
-                if self.keyboard_running:  # 只在正常运行时报错
-                    self.get_logger().error(f"键盘监听异常: {e}")
+                self.get_logger().error(f"键盘监听异常: {e}")
             time.sleep(0.05)
         
-        # 恢复终端设置（安全处理）
+        # 恢复终端设置
         if sys.platform != 'win32' and self.terminal_settings:
-            try:
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
-            except Exception:
-                pass  # 忽略终端恢复错误
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
         
         self.get_logger().info("键盘监听线程退出")
     
@@ -353,17 +349,17 @@ class KeyboardCommander:
             print("⚠️  请先选择无人机（按 1/2/3/A）")
             return
         
-        # SPACE: 自動 ARM + TAKEOFF + OFFBOARD
+        # SPACE: 自动起飞流程 ARM → TAKEOFF → OFFBOARD
         if key == ' ':
             self._send_command_to_selected('ARM_TOGGLE')
-            print(f"✈️  解鎖+起飛+Offboard: {sorted(self.selected_drones)}")
+            print(f"🚀 自动起飞: ARM → TAKEOFF(2.5m) → OFFBOARD: {sorted(self.selected_drones)}")
         
-        # 降落（降落後自動上鎖）
+        # L: 降落
         elif key == 'l' or key == 'L':
             self._send_command_to_selected('LAND')
             print(f"🛬 降落命令: {sorted(self.selected_drones)}")
         
-        # 紧急悬停
+        # H: 紧急悬停
         elif key == 'h' or key == 'H':
             self._send_command_to_selected('HOLD')
             print(f"⏸️  紧急悬停: {sorted(self.selected_drones)}")
@@ -894,17 +890,11 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
         if self.keyboard_thread:
             self.keyboard_thread.join(timeout=2.0)
         
-        # 恢复终端设置（安全处理）
+        # 恢复终端设置
         if sys.platform != 'win32' and self.terminal_settings:
-            try:
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
-            except Exception:
-                pass  # 忽略终端恢复错误
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
         
-        try:
-            super().destroy_node()
-        except Exception:
-            pass
+        Node.destroy_node(self)
 
 
 def main(args=None):
@@ -922,10 +912,7 @@ def main(args=None):
         node.get_logger().info("收到中断信号")
     finally:
         node.destroy_node()
-        try:
-            rclpy.shutdown()
-        except Exception:
-            pass  # 忽略 shutdown 错误
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

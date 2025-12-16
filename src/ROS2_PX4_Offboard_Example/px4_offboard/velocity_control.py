@@ -132,7 +132,7 @@ class OffboardControl(Node):
         self.timer = self.create_timer(timer_period, self.cmdloop_callback)
 
         self.nav_state = VehicleStatus.NAVIGATION_STATE_MAX
-        self.arm_state = 1  # 1 = DISARMED, 2 = ARMED
+        self.arm_state = VehicleStatus.ARMING_STATE_ARMED
         self.velocity = Vector3()
         self.yaw = 0.0  #yaw value we send as command
         self.trueYaw = 0.0  #current yaw value of drone
@@ -169,48 +169,44 @@ class OffboardControl(Node):
         self.get_logger().info(f"Arm Message: {self.arm_message}")
     
     def command_callback(self, msg: String):
-        """接收键盘控制命令
-        
-        命令流程：
-        - ARM_TOGGLE: 設置 arm_message=True，觸發狀態機 IDLE->ARMING->TAKEOFF->LOITER->OFFBOARD
-        - LAND: 發送降落命令並設置 arm_message=False 以返回 IDLE
-        - HOLD: 緊急懸停（清零速度）
-        - START_SCAN/STOP_SCAN: 控制信號掃描
-        """
+        """接收键盘控制命令 - 触发状态机而非直接发送命令"""
         command = msg.data
         self.get_logger().info(f"收到命令: {command}")
         
         if command == 'ARM_TOGGLE':
-            # 設置 arm_message=True，觸發狀態機自動流程
-            # IDLE -> ARMING -> TAKEOFF -> LOITER -> OFFBOARD
-            self.arm_message = True
-            self.myCnt = 0  # 重置計數器
-            self.get_logger().info("✈️  觸發自動起飛流程 (ARM -> TAKEOFF -> OFFBOARD)")
+            # SPACE 键：触发自动流程 ARM → TAKEOFF → OFFBOARD
+            if self.arm_state == 2:  # VehicleStatus.ARMING_STATE_ARMED = 2
+                # 已在空中，忽略（用户应按 L 降落）
+                self.get_logger().info("无人机已解锁，若要降落请按 L")
+            else:
+                # 触发状态机：IDLE → ARMING → TAKEOFF → LOITER → OFFBOARD
+                self.arm_message = True
+                self.get_logger().info("🚀 触发自动起飞流程：ARM → TAKEOFF(2.5m) → OFFBOARD")
         
         elif command == 'LAND':
-            # 降落並返回 IDLE 狀態
-            self.arm_message = False  # 重置狀態機
+            # L 键：降落并重置状态机
+            self.arm_message = False  # 重置状态机
             self.current_state = "IDLE"
             self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
-            self.get_logger().info("🛬 發送降落命令，返回 IDLE 狀態")
+            self.get_logger().info("🛬 发送降落命令，状态机重置")
         
         elif command == 'HOLD':
-            # 紧急悬停（立即清零速度）
+            # H 键：紧急悬停（立即清零速度）
             self.velocity.x = 0.0
             self.velocity.y = 0.0
             self.velocity.z = 0.0
             self.yaw = 0.0
-            self.get_logger().info("⏸️  紧急悬停：速度清零")
+            self.get_logger().info("⏸️ 紧急悬停：速度清零")
         
         elif command == 'START_SCAN':
-            # 启动扫描
+            # F 键：启动扫描
             scan_cmd = Bool()
             scan_cmd.data = True
             self.scan_control_pub.publish(scan_cmd)
             self.get_logger().info("📡 发送启动扫描命令")
         
         elif command == 'STOP_SCAN':
-            # 停止扫描
+            # G 键：停止扫描
             scan_cmd = Bool()
             scan_cmd.data = False
             self.scan_control_pub.publish(scan_cmd)
@@ -241,7 +237,7 @@ class OffboardControl(Node):
                 if(not(self.flightCheck)):
                     self.current_state = "IDLE"
                     self.get_logger().info(f"Arming, Flight Check Failed")
-                elif(self.arm_state == VehicleStatus.ARMING_STATE_ARMED and self.myCnt > 10):
+                elif(self.arm_state == 2 and self.myCnt > 10):  # ARMING_STATE_ARMED = 2
                     self.current_state = "TAKEOFF"
                     self.get_logger().info(f"Arming, Takeoff")
                 self.arm() #send arm command
@@ -275,12 +271,12 @@ class OffboardControl(Node):
                 self.arm()
 
             case "OFFBOARD":
-                if(not(self.flightCheck) or self.arm_state != VehicleStatus.ARMING_STATE_ARMED or self.failsafe == True):
+                if(not(self.flightCheck) or self.arm_state != 2 or self.failsafe == True):  # ARMING_STATE_ARMED = 2
                     self.current_state = "IDLE"
                     self.get_logger().info(f"Offboard, Flight Check Failed")
                 self.state_offboard()
 
-        if(self.arm_state != VehicleStatus.ARMING_STATE_ARMED):
+        if(self.arm_state != 2):  # ARMING_STATE_ARMED = 2
             self.arm_message = False
 
         if (self.last_state != self.current_state):
