@@ -18,7 +18,7 @@ Jetson 机载节点启动文件
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -62,20 +62,17 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
-    # 2. processes（MicroXRCEAgent - PX4 連接 Jetson）
-    processes_node = Node(
-        package='ros2_px4_offboard_example',
-        executable='processes.py',
-        name='processes_',
-        output='screen',
-        emulate_tty=True,
+    # 2. MicroXRCEAgent（PX4 ↔ Jetson 串口橋接）
+    micro_xrce_agent = ExecuteProcess(
+        cmd=['MicroXRCEAgent', 'serial', '-D', '/dev/ttyUSB0', '-b', '921600'],
+        output='screen'
     )
-    
+
     # 注意：ros2 topic relay 在 ROS2 Humble 中不存在
     # 如需 topic 重映射，請使用 remappings 參數或在 Laptop 端訂閱原始 topic
     
     return [
-        processes_node,   # 先啟動 MicroXRCEAgent
+        micro_xrce_agent,   # 先啟動 MicroXRCEAgent
         fast_scan_node,
         velocity_control_node,
     ]
