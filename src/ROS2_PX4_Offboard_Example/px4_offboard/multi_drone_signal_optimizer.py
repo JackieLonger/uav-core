@@ -7,6 +7,7 @@ Multi-Drone Signal Optimizer - 多无人机协同信号优化器
 - 每个 Jetson 运行 fast_scan_node.py（扫描并发布到 /drone_N/link_quality）
 - 每个 Jetson 运行 velocity_control.py（接收 /drone_N/offboard_velocity_cmd）
 - 多线程异步处理每个无人机的决策（不阻塞）
+- 键盘控制：统一控制多架无人机（ARM, TAKEOFF, OFFBOARD, LAND, HOLD）
 
 策略：
 1. 优先上升到 1.5m
@@ -15,14 +16,27 @@ Multi-Drone Signal Optimizer - 多无人机协同信号优化器
 4. 信号变差 → XY随机小幅搜索
 5. 最多 5 次移动
 6. 速度限制 0.3 m/s
+
+键盘控制：
+- SPACE: ARM/DISARM 所有无人机
+- T: 起飞到 2.5m
+- O: 进入 Offboard 模式
+- L: 降落
+- H: 紧急悬停
+- S: 开始优化
+- P: 暂停优化
+- 1/2/3: 选择控制单个无人机
+- A: 选择所有无人机
+- Q: 退出程序
 """
 
+import sys
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from px4_msgs.msg import VehicleLocalPosition
 import threading
 import json
@@ -31,7 +45,13 @@ import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Set
+
+# 键盘控制（Linux/Unix）
+if sys.platform != 'win32':
+    import termios
+    import tty
+    import select
 
 
 @dataclass
@@ -47,7 +67,7 @@ class TrackerData:
     
     @property
     def quality_score(self) -> float:
-        """综合质量评分（RSSI + SNR 各占 50%）"""
+        """综合质量评分（RSSI 50% + SNR 50%）"""
         try:
             # 确保 RSSI 和 SNR 是浮点数（可能从 JSON 来是字符串）
             forward_rssi = float(self.forward_rssi) if self.forward_rssi else 0.0
@@ -55,17 +75,17 @@ class TrackerData:
             forward_snr = float(self.forward_snr) if self.forward_snr else 0.0
             return_snr = float(self.return_snr) if self.return_snr else 0.0
             
-            # RSSI 归一化 (-100 to -20 dBm)
+            # RSSI 归一化 (-120 to -30 dBm → 0 to 1)
             rssi_avg = (forward_rssi + return_rssi) / 2.0
-            rssi_score = (rssi_avg + 100) / 80.0
+            rssi_score = (rssi_avg + 120) / 90.0
             rssi_score = max(0.0, min(1.0, rssi_score))
             
-            # SNR 归一化 (-10 to 20 dB)
+            # SNR 归一化 (-20 to 15 dB → 0 to 1)
             snr_avg = (forward_snr + return_snr) / 2.0
-            snr_score = (snr_avg + 10) / 30.0
+            snr_score = (snr_avg + 20) / 35.0
             snr_score = max(0.0, min(1.0, snr_score))
             
-            # 综合评分
+            # 综合评分 (RSSI 50% + SNR 50%)
             return 0.5 * rssi_score + 0.5 * snr_score
         except (ValueError, TypeError):
             # 如果数据无效，返回 0
@@ -214,18 +234,237 @@ class DroneState:
             rssi_score = (rssi_avg + 100) / 80.0
             rssi_score = max(0.0, min(1.0, rssi_score))
             
-            # 歸一化 SNR (-10 到 20 dB → 0 到 1)
-            snr_score = (snr_avg + 10) / 30.0
+            # 歸一化 SNR (-20 到 15 dB → 0 到 1)
+            snr_score = (snr_avg + 20) / 35.0
             snr_score = max(0.0, min(1.0, snr_score))
             
-            # 加權平均 (RSSI 60%, SNR 40%)
-            quality = 0.6 * rssi_score + 0.4 * snr_score
+            # 加權平均 (RSSI 50%, SNR 50%)
+            quality = 0.5 * rssi_score + 0.5 * snr_score
             
             return quality
 
 
-class MultiDroneSignalOptimizer(Node):
-    """多无人机信号优化器（多线程异步）"""
+class KeyboardCommander:
+    """键盘控制 Mixin（多无人机统一控制）"""
+    
+    HELP_MSG = """
+══════════════════════════════════════════════════════════════
+多无人机键盘控制台 - Multi-Drone Keyboard Commander
+══════════════════════════════════════════════════════════════
+基本控制：
+  SPACE  : ARM/DISARM 选中的无人机
+  T      : 起飞到 2.5m
+  O      : 进入 Offboard 模式
+  L      : 降落
+  H      : 紧急悬停（立即停止移动）
+
+扫描控制：
+  F      : 启动信号扫描（Fast Scan）
+  G      : 停止信号扫描
+
+优化控制：
+  S      : 开始信号优化（默认已启用）
+  P      : 暂停信号优化
+
+选择控制：
+  1/2/3  : 选择单个无人机（Drone 1/2/3）
+  A      : 选择所有无人机
+
+其他：
+  Q      : 退出程序
+  ?      : 显示此帮助
+══════════════════════════════════════════════════════════════
+    """
+    
+    def __init__(self):
+        """初始化键盘控制器"""
+        self.keyboard_thread = None
+        self.terminal_settings = None
+        self.selected_drones: Set[int] = set()  # 当前选中的无人机 ID
+        self.optimization_enabled = True  # 优化默认启用
+        self.scan_enabled = False  # 扫描是否启用（需手动启动）
+        self.keyboard_running = True
+        
+        # 状态显示定时器（每 2 秒刷新）
+        self.status_timer = None
+        
+    def init_keyboard_control(self, drone_ids: list):
+        """初始化键盘控制（在 ROS2 node 初始化后调用）"""
+        # 默认选择所有无人机
+        self.selected_drones = set(drone_ids)
+        
+        # 保存终端设置
+        if sys.platform != 'win32':
+            self.terminal_settings = termios.tcgetattr(sys.stdin)
+        
+        # 启动键盘监听线程
+        self.keyboard_thread = threading.Thread(
+            target=self._keyboard_listener,
+            daemon=True,
+            name="KeyboardListener"
+        )
+        self.keyboard_thread.start()
+        
+        # 启动状态显示定时器（2秒刷新一次）
+        self.status_timer = self.create_timer(2.0, self._display_status)
+        
+        # 显示帮助信息
+        print(self.HELP_MSG)
+        self._display_status()
+        
+    def _get_key_nonblocking(self):
+        """非阻塞式读取单个按键（Linux/Unix）"""
+        if sys.platform == 'win32':
+            # Windows 暂不支持
+            return None
+        
+        tty.setraw(sys.stdin.fileno())
+        dr, _, _ = select.select([sys.stdin], [], [], 0.1)
+        key = None
+        if dr:
+            key = sys.stdin.read(1)
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+        return key
+    
+    def _keyboard_listener(self):
+        """键盘监听线程"""
+        self.get_logger().info("键盘监听线程启动")
+        
+        while self.keyboard_running and rclpy.ok():
+            try:
+                key = self._get_key_nonblocking()
+                if key:
+                    self._handle_key(key)
+            except Exception as e:
+                self.get_logger().error(f"键盘监听异常: {e}")
+            time.sleep(0.05)
+        
+        # 恢复终端设置
+        if sys.platform != 'win32' and self.terminal_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+        
+        self.get_logger().info("键盘监听线程退出")
+    
+    def _handle_key(self, key: str):
+        """处理按键事件"""
+        if not self.selected_drones:
+            print("⚠️  请先选择无人机（按 1/2/3/A）")
+            return
+        
+        # ARM/DISARM
+        if key == ' ':
+            self._send_command_to_selected('ARM_TOGGLE')
+            print(f"✈️  ARM/DISARM: {sorted(self.selected_drones)}")
+        
+        # 起飞
+        elif key == 't' or key == 'T':
+            self._send_command_to_selected('TAKEOFF')
+            print(f"🚁 起飞命令: {sorted(self.selected_drones)}")
+        
+        # Offboard 模式
+        elif key == 'o' or key == 'O':
+            self._send_command_to_selected('OFFBOARD')
+            print(f"🎯 进入 Offboard 模式: {sorted(self.selected_drones)}")
+        
+        # 降落
+        elif key == 'l' or key == 'L':
+            self._send_command_to_selected('LAND')
+            print(f"🛬 降落命令: {sorted(self.selected_drones)}")
+        
+        # 紧急悬停
+        elif key == 'h' or key == 'H':
+            self._send_command_to_selected('HOLD')
+            print(f"⏸️  紧急悬停: {sorted(self.selected_drones)}")
+        
+        # 启动扫描
+        elif key == 'f' or key == 'F':
+            self.scan_enabled = True
+            self._send_command_to_selected('START_SCAN')
+            print(f"📡 信号扫描已启动: {sorted(self.selected_drones)}")
+        
+        # 停止扫描
+        elif key == 'g' or key == 'G':
+            self.scan_enabled = False
+            self._send_command_to_selected('STOP_SCAN')
+            print(f"⏹️  信号扫描已停止: {sorted(self.selected_drones)}")
+        
+        # 开始优化
+        elif key == 's' or key == 'S':
+            self.optimization_enabled = True
+            print("🔍 信号优化已启动")
+        
+        # 暂停优化
+        elif key == 'p' or key == 'P':
+            self.optimization_enabled = False
+            # 停止所有速度指令
+            for drone_id in self.selected_drones:
+                if drone_id in self.drone_states:
+                    with self.drone_states[drone_id].lock:
+                        self.drone_states[drone_id].current_velocity = (0.0, 0.0, 0.0)
+            print("⏸️  信号优化已暂停")
+        
+        # 选择单个无人机
+        elif key in ['1', '2', '3']:
+            drone_id = int(key)
+            if drone_id in self.drone_states:
+                self.selected_drones = {drone_id}
+                print(f"✓ 已选择 Drone {drone_id}")
+            else:
+                print(f"⚠️  Drone {drone_id} 不存在")
+        
+        # 选择所有无人机
+        elif key == 'a' or key == 'A':
+            self.selected_drones = set(self.drone_states.keys())
+            print(f"✓ 已选择所有无人机: {sorted(self.selected_drones)}")
+        
+        # 退出
+        elif key == 'q' or key == 'Q':
+            print("\n👋 正在退出...")
+            self.keyboard_running = False
+            self.running = False
+            rclpy.shutdown()
+        
+        # 帮助
+        elif key == '?':
+            print(self.HELP_MSG)
+    
+    def _send_command_to_selected(self, command: str):
+        """向选中的无人机发送命令"""
+        for drone_id in self.selected_drones:
+            if drone_id in self.command_publishers:
+                msg = String()
+                msg.data = command
+                self.command_publishers[drone_id].publish(msg)
+    
+    def _display_status(self):
+        """显示当前状态（定时刷新）"""
+        status_lines = []
+        status_lines.append("\n" + "="*60)
+        status_lines.append(f"选中无人机: {sorted(self.selected_drones)}")
+        status_lines.append(f"扫描状态: {'📡 运行中' if self.scan_enabled else '⏹️  已停止'}")
+        status_lines.append(f"优化状态: {'🟢 运行中' if self.optimization_enabled else '🔴 已暂停'}")
+        status_lines.append("─"*60)
+        
+        for drone_id in sorted(self.drone_states.keys()):
+            state = self.drone_states[drone_id]
+            with state.lock:
+                selected = "👉" if drone_id in self.selected_drones else "  "
+                quality = state.current_quality
+                moves = state.movement_count
+                vx, vy, vz = state.current_velocity
+                
+            status_lines.append(
+                f"{selected} Drone {drone_id}: Q={quality:.3f} | "
+                f"Moves={moves}/{self.MAX_MOVEMENTS} | "
+                f"V=({vx:.2f}, {vy:.2f}, {vz:.2f})"
+            )
+        
+        status_lines.append("="*60)
+        print("\n".join(status_lines))
+
+
+class MultiDroneSignalOptimizer(Node, KeyboardCommander):
+    """多无人机信号优化器（多线程异步 + 键盘控制）"""
     
     # 常量配置
     MAX_MOVEMENTS = 5
@@ -248,7 +487,10 @@ class MultiDroneSignalOptimizer(Node):
     BOUNDS_Z = (0.0, 3.0)  # 只能上升
     
     def __init__(self):
-        super().__init__('multi_drone_signal_optimizer')
+        # 初始化 Node
+        Node.__init__(self, 'multi_drone_signal_optimizer')
+        # 初始化 KeyboardCommander
+        KeyboardCommander.__init__(self)
         
         # 声明参数
         self.declare_parameter('num_drones', 3)
@@ -301,6 +543,17 @@ class MultiDroneSignalOptimizer(Node):
             )
             self.get_logger().info(f"发布到 {topic}")
         
+        # 发布命令（键盘控制）
+        self.command_publishers = {}
+        for drone_id in drone_ids:
+            topic = f'/drone_{drone_id}/command'
+            self.command_publishers[drone_id] = self.create_publisher(
+                String,
+                topic,
+                10
+            )
+            self.get_logger().info(f"命令发布到 {topic}")
+        
         # 为每个无人机创建独立的决策线程
         self.decision_threads = {}
         self.running = True
@@ -327,7 +580,11 @@ class MultiDroneSignalOptimizer(Node):
             thread.start()
             self.publish_threads[drone_id] = thread
         
+        # 初始化键盘控制
+        self.init_keyboard_control(drone_ids)
+        
         self.get_logger().info(f"多无人机信号优化器启动完成（{num_drones} 架无人机）")
+        self.get_logger().info("键盘控制已启用，按 ? 查看帮助")
     
     def link_quality_callback(self, msg: String, drone_id: int):
         """接收 link_quality 数据（每个无人机独立回调）"""
@@ -552,6 +809,13 @@ class MultiDroneSignalOptimizer(Node):
         
         while self.running:
             try:
+                # 检查优化是否启用
+                if not self.optimization_enabled:
+                    with state.lock:
+                        state.current_velocity = (0.0, 0.0, 0.0)
+                    time.sleep(0.5)
+                    continue
+                
                 # 检查是否达到移动限制
                 if state.movement_count >= self.MAX_MOVEMENTS:
                     with state.lock:
@@ -628,14 +892,21 @@ class MultiDroneSignalOptimizer(Node):
         """节点关闭"""
         self.get_logger().info("正在关闭多无人机优化器...")
         self.running = False
+        self.keyboard_running = False
         
-        # 等待所有线程退出
+        # 停止所有线程
         for drone_id, thread in self.decision_threads.items():
             thread.join(timeout=2.0)
         for drone_id, thread in self.publish_threads.items():
             thread.join(timeout=2.0)
+        if self.keyboard_thread:
+            self.keyboard_thread.join(timeout=2.0)
         
-        super().destroy_node()
+        # 恢复终端设置
+        if sys.platform != 'win32' and self.terminal_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.terminal_settings)
+        
+        Node.destroy_node(self)
 
 
 def main(args=None):

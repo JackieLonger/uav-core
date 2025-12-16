@@ -157,11 +157,12 @@ class MultiDroneVisualizer(Node):
         )
         
         # 如果是第一台無人機，保持原點
-        # 如果是第二台，手動偏移顯示（僅用於視覺化區分，不影響控制）
+        # 如果是第二/三台，手動偏移顯示（僅用於視覺化區分，不影響控制）
+        # 使用較小偏移量 (0.5m) 以更好顯示實際移動
         if drone_id == 2:
-            pos.x += 2.0  # 向東偏移 2 米
+            pos.x += 0.5  # 向東偏移 0.5 米
         elif drone_id == 3:
-            pos.x -= 2.0  # 向西偏移 2 米
+            pos.x -= 0.5  # 向西偏移 0.5 米
             
         state['position'] = pos
         state['trajectory'].append(pos)
@@ -207,40 +208,39 @@ class MultiDroneVisualizer(Node):
             
             # 计算综合质量
             if data.get('status') == 'Success':
-                forward_rssi = data.get('forward_rssi', 0.0)
-                forward_snr = data.get('forward_snr', 0.0)
-                return_rssi = data.get('return_rssi', 0.0)
-                return_snr = data.get('return_snr', 0.0)
+                # 安全的類型轉換 (JSON 值可能是字串)
+                forward_rssi = float(data.get('forward_rssi', 0.0) or 0.0)
+                forward_snr = float(data.get('forward_snr', 0.0) or 0.0)
+                return_rssi = float(data.get('return_rssi', 0.0) or 0.0)
+                return_snr = float(data.get('return_snr', 0.0) or 0.0)
                 
-                # RSSI 归一化
+                # RSSI 归一化 [-120, -30] dBm → [0, 1]
                 rssi_avg = (forward_rssi + return_rssi) / 2.0
-                rssi_score = (rssi_avg + 100) / 80.0
+                rssi_score = (rssi_avg + 120) / 90.0  # -120 dBm = 0, -30 dBm = 1
                 rssi_score = max(0.0, min(1.0, rssi_score))
                 
-                # SNR 归一化
+                # SNR 归一化 [-20, 15] dB → [0, 1]
                 snr_avg = (forward_snr + return_snr) / 2.0
-                snr_score = (snr_avg + 10) / 30.0
+                snr_score = (snr_avg + 20) / 35.0  # -20 dB = 0, 15 dB = 1
                 snr_score = max(0.0, min(1.0, snr_score))
                 
-                # 综合评分
+                # 综合评分 (0.5 RSSI + 0.5 SNR)
                 quality = 0.5 * rssi_score + 0.5 * snr_score
                 
-                # 更新（如果有两个tracker，取平均）
+                # 直接更新 (不要平均，使用最新值)
                 state = self.drone_states[drone_id]
-                if state['quality'] == 0.0:
-                    state['quality'] = quality
-                else:
-                    state['quality'] = (state['quality'] + quality) / 2.0
+                state['quality'] = quality
                 
                 # 記錄信號質量歷史
                 timestamp = time.time()
                 state['quality_history'].append(quality)
                 state['rssi_history'].append(rssi_avg)
                 state['snr_history'].append(snr_avg)
+                state['timestamp_history'].append(timestamp)  # 確保同步記錄時間戳
                 
                 # 調試輸出
-                if len(state['quality_history']) <= 3:
-                    self.get_logger().info(f'Drone {drone_id} 信號記錄 #{len(state["quality_history"])}: Q={quality:.2f}, RSSI={rssi_avg:.1f}, SNR={snr_avg:.1f}')
+                if len(state['quality_history']) <= 5 or len(state['quality_history']) % 10 == 0:
+                    self.get_logger().info(f'Drone {drone_id} 信號記錄 #{len(state["quality_history"])}: Q={quality:.2f}, RSSI={rssi_avg:.1f}dBm, SNR={snr_avg:.1f}dB')
                 
         except Exception as e:
             self.get_logger().error(f"质量回调错误: {e}")
@@ -450,6 +450,85 @@ class MultiDroneVisualizer(Node):
                 arrow_marker.color.a = 0.8
                 
                 markers.markers.append(arrow_marker)
+            
+            # 2.6 RSSI 歷史曲線 (紅色線條)
+            rssi_history = state['rssi_history']
+            if len(rssi_history) >= 2:
+                rssi_line = Marker()
+                rssi_line.header.frame_id = "map"
+                rssi_line.header.stamp = self.get_clock().now().to_msg()
+                rssi_line.ns = f"rssi_history_{drone_id}"
+                rssi_line.id = marker_id
+                marker_id += 1
+                rssi_line.type = Marker.LINE_STRIP
+                rssi_line.action = Marker.ADD
+                rssi_line.scale.x = 0.05  # 線條寬度
+                rssi_line.color.r = 1.0
+                rssi_line.color.g = 0.2
+                rssi_line.color.b = 0.2
+                rssi_line.color.a = 0.8
+                
+                # 取最近 50 個數據點
+                recent_rssi = rssi_history[-50:] if len(rssi_history) > 50 else rssi_history
+                for i, rssi in enumerate(recent_rssi):
+                    pt = Point()
+                    pt.x = pos.x + (i - len(recent_rssi)/2) * 0.1  # 水平展開
+                    pt.y = pos.y + 1.0  # Y 方向偏移
+                    # RSSI 歸一化到高度 [-120, -30] dBm → [0, 2] m
+                    pt.z = pos.z + 2.0 + (rssi + 120) / 45.0
+                    rssi_line.points.append(pt)
+                
+                markers.markers.append(rssi_line)
+            
+            # 2.7 SNR 歷史曲線 (藍色線條)
+            snr_history = state['snr_history']
+            if len(snr_history) >= 2:
+                snr_line = Marker()
+                snr_line.header.frame_id = "map"
+                snr_line.header.stamp = self.get_clock().now().to_msg()
+                snr_line.ns = f"snr_history_{drone_id}"
+                snr_line.id = marker_id
+                marker_id += 1
+                snr_line.type = Marker.LINE_STRIP
+                snr_line.action = Marker.ADD
+                snr_line.scale.x = 0.05
+                snr_line.color.r = 0.2
+                snr_line.color.g = 0.2
+                snr_line.color.b = 1.0
+                snr_line.color.a = 0.8
+                
+                # 取最近 50 個數據點
+                recent_snr = snr_history[-50:] if len(snr_history) > 50 else snr_history
+                for i, snr in enumerate(recent_snr):
+                    pt = Point()
+                    pt.x = pos.x + (i - len(recent_snr)/2) * 0.1
+                    pt.y = pos.y - 1.0  # Y 方向偏移 (與 RSSI 相反)
+                    # SNR 歸一化到高度 [-20, 15] dB → [0, 2] m
+                    pt.z = pos.z + 2.0 + (snr + 20) / 17.5
+                    snr_line.points.append(pt)
+                
+                markers.markers.append(snr_line)
+            
+            # 2.8 信號數值標籤
+            if len(rssi_history) > 0 and len(snr_history) > 0:
+                signal_label = Marker()
+                signal_label.header.frame_id = "map"
+                signal_label.header.stamp = self.get_clock().now().to_msg()
+                signal_label.ns = f"signal_label_{drone_id}"
+                signal_label.id = marker_id
+                marker_id += 1
+                signal_label.type = Marker.TEXT_VIEW_FACING
+                signal_label.action = Marker.ADD
+                signal_label.pose.position.x = pos.x
+                signal_label.pose.position.y = pos.y
+                signal_label.pose.position.z = pos.z + 4.0  # 無人機上方 4m
+                signal_label.scale.z = 0.3
+                signal_label.color.r = 1.0
+                signal_label.color.g = 1.0
+                signal_label.color.b = 1.0
+                signal_label.color.a = 1.0
+                signal_label.text = f"RSSI:{rssi_history[-1]:.0f}dBm SNR:{snr_history[-1]:.1f}dB"
+                markers.markers.append(signal_label)
         
         # 发布
         self.marker_pub.publish(markers)

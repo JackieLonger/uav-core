@@ -37,7 +37,8 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         emulate_tty=True,
         remappings=[
-            ('link_quality', f'/drone_{drone_id}/link_quality')
+            ('link_quality', f'/drone_{drone_id}/link_quality'),
+            ('scan_control', f'/drone_{drone_id}/scan_control')  # 接收遠程掃描控制
         ],
         parameters=[{
             'use_sim_time': False,
@@ -52,7 +53,9 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         emulate_tty=True,
         remappings=[
-            ('offboard_velocity_cmd', f'/drone_{drone_id}/offboard_velocity_cmd')
+            ('offboard_velocity_cmd', f'/drone_{drone_id}/offboard_velocity_cmd'),
+            ('command', f'/drone_{drone_id}/command'),  # 接收鍵盤命令
+            ('scan_control', f'/drone_{drone_id}/scan_control')  # 發布掃描控制
         ],
         parameters=[{
             'use_sim_time': False

@@ -49,7 +49,7 @@ from px4_msgs.msg import VehicleCommand
 from px4_msgs.msg import VehicleLocalPosition
 from geometry_msgs.msg import Twist, Vector3
 from math import pi
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 class OffboardControl(Node):
@@ -104,6 +104,13 @@ class OffboardControl(Node):
             '/arm_message',
             self.arm_message_callback,
             px4_qos_profile)
+        
+        # 订阅命令（键盘控制）
+        self.command_sub = self.create_subscription(
+            String,
+            'command',  # 相对名称，允许 remapping 到 /drone_X/command
+            self.command_callback,
+            cmd_qos_profile)
 
 
         #Create publishers
@@ -148,11 +155,76 @@ class OffboardControl(Node):
         # 當前高度（相對於地面，單位：米）
         self.current_altitude = 0.0
         self.ground_level_z = None  # 地面 Z 座標（NED 框架）
+        
+        # 扫描控制發布器（用於控制 fast_scan_node）
+        self.scan_control_pub = self.create_publisher(
+            Bool,
+            'scan_control',  # 相對名稱，映射到 /drone_N/scan_control
+            10
+        )
 
 
     def arm_message_callback(self, msg):
         self.arm_message = msg.data
         self.get_logger().info(f"Arm Message: {self.arm_message}")
+    
+    def command_callback(self, msg: String):
+        """接收键盘控制命令"""
+        command = msg.data
+        self.get_logger().info(f"收到命令: {command}")
+        
+        if command == 'ARM_TOGGLE':
+            # 切换解锁状态
+            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
+                # 已解锁 -> 上锁
+                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0)
+                self.get_logger().info("发送上锁命令")
+            else:
+                # 未解锁 -> 解锁
+                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
+                self.get_logger().info("发送解锁命令")
+        
+        elif command == 'TAKEOFF':
+            # 起飞到 2.5m
+            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
+                self.take_off()
+            else:
+                self.get_logger().warning("无人机未解锁，无法起飞")
+        
+        elif command == 'OFFBOARD':
+            # 进入 Offboard 模式
+            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
+                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1., 6.)
+                self.get_logger().info("发送 Offboard 模式切换命令")
+            else:
+                self.get_logger().warning("无人机未解锁，无法进入 Offboard")
+        
+        elif command == 'LAND':
+            # 降落
+            self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
+            self.get_logger().info("发送降落命令")
+        
+        elif command == 'HOLD':
+            # 紧急悬停（立即清零速度）
+            self.velocity.x = 0.0
+            self.velocity.y = 0.0
+            self.velocity.z = 0.0
+            self.yaw = 0.0
+            self.get_logger().info("紧急悬停：速度清零")
+        
+        elif command == 'START_SCAN':
+            # 启动扫描
+            scan_cmd = Bool()
+            scan_cmd.data = True
+            self.scan_control_pub.publish(scan_cmd)
+            self.get_logger().info("📡 发送启动扫描命令")
+        
+        elif command == 'STOP_SCAN':
+            # 停止扫描
+            scan_cmd = Bool()
+            scan_cmd.data = False
+            self.scan_control_pub.publish(scan_cmd)
+            self.get_logger().info("⏹️  发送停止扫描命令")
     
     def position_callback(self, msg: VehicleLocalPosition):
         """接收位置信息，計算當前高度"""

@@ -5,7 +5,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 import meshtastic
 import meshtastic.serial_interface
 from pubsub import pub
@@ -47,6 +47,16 @@ class FastScanNode(Node):
         
         self.callback_group = ReentrantCallbackGroup()
         self.link_pub = self.create_publisher(String, 'link_quality', 10)
+        
+        # 扫描控制订阅（由 Laptop 远程控制）
+        self.scan_control_sub = self.create_subscription(
+            Bool,
+            'scan_control',  # 相对名称，映射到 /drone_N/scan_control
+            self.scan_control_callback,
+            10
+        )
+        self.scan_enabled = False  # 默认关闭扫描，等待 Laptop 启动
+        
         self.response_event = threading.Event()
         self.response_lock = threading.Lock()  # 線程安全保護
         self.results = {}
@@ -61,6 +71,15 @@ class FastScanNode(Node):
         self.timer = self.create_timer(PROBE_INTERVAL + 2, self.timer_callback, callback_group=self.callback_group)
         self.get_logger().info(f"FastScanNode 啟動，綁定 Tracker: {self.target_node_ids}")
         self.get_logger().info(f"使用 Meshtastic 端口: {self.meshtastic_port} (固定綁定)")
+        self.get_logger().info("扫描默认关闭，等待 Laptop 按 F 键启动")
+    
+    def scan_control_callback(self, msg: Bool):
+        """接收扫描控制命令（由 Laptop 发送）"""
+        self.scan_enabled = msg.data
+        if self.scan_enabled:
+            self.get_logger().info("📡 扫描已启动（收到远程命令）")
+        else:
+            self.get_logger().info("⏹️  扫描已停止（收到远程命令）")
     
     def onReceive(self, packet, interface):
         try:
@@ -171,6 +190,10 @@ class FastScanNode(Node):
         self.get_logger().info(f"[probe_node] 探測 {target_id} 完成\n")
 
     def timer_callback(self):
+        # 检查扫描是否启用
+        if not self.scan_enabled:
+            return
+        
         if self.scanning:
             return
         self.scanning = True
