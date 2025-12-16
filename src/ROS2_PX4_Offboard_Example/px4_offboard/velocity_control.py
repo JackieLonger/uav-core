@@ -132,7 +132,7 @@ class OffboardControl(Node):
         self.timer = self.create_timer(timer_period, self.cmdloop_callback)
 
         self.nav_state = VehicleStatus.NAVIGATION_STATE_MAX
-        self.arm_state = VehicleStatus.ARMING_STATE_DISARMED  # 修正：初始為未解鎖
+        self.arm_state = 1  # 1 = DISARMED, 2 = ARMED
         self.velocity = Vector3()
         self.yaw = 0.0  #yaw value we send as command
         self.trueYaw = 0.0  #current yaw value of drone
@@ -169,40 +169,30 @@ class OffboardControl(Node):
         self.get_logger().info(f"Arm Message: {self.arm_message}")
     
     def command_callback(self, msg: String):
-        """接收键盘控制命令"""
+        """接收键盘控制命令
+        
+        命令流程：
+        - ARM_TOGGLE: 設置 arm_message=True，觸發狀態機 IDLE->ARMING->TAKEOFF->LOITER->OFFBOARD
+        - LAND: 發送降落命令並設置 arm_message=False 以返回 IDLE
+        - HOLD: 緊急懸停（清零速度）
+        - START_SCAN/STOP_SCAN: 控制信號掃描
+        """
         command = msg.data
         self.get_logger().info(f"收到命令: {command}")
         
         if command == 'ARM_TOGGLE':
-            # 切换解锁状态
-            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
-                # 已解锁 -> 上锁
-                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0)
-                self.get_logger().info("发送上锁命令")
-            else:
-                # 未解锁 -> 解锁
-                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
-                self.get_logger().info("发送解锁命令")
-        
-        elif command == 'TAKEOFF':
-            # 起飞到 2.5m
-            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
-                self.take_off()
-            else:
-                self.get_logger().warning("无人机未解锁，无法起飞")
-        
-        elif command == 'OFFBOARD':
-            # 进入 Offboard 模式
-            if self.arm_state == VehicleStatus.ARMING_STATE_ARMED:
-                self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1., 6.)
-                self.get_logger().info("发送 Offboard 模式切换命令")
-            else:
-                self.get_logger().warning("无人机未解锁，无法进入 Offboard")
+            # 設置 arm_message=True，觸發狀態機自動流程
+            # IDLE -> ARMING -> TAKEOFF -> LOITER -> OFFBOARD
+            self.arm_message = True
+            self.myCnt = 0  # 重置計數器
+            self.get_logger().info("✈️  觸發自動起飛流程 (ARM -> TAKEOFF -> OFFBOARD)")
         
         elif command == 'LAND':
-            # 降落
+            # 降落並返回 IDLE 狀態
+            self.arm_message = False  # 重置狀態機
+            self.current_state = "IDLE"
             self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
-            self.get_logger().info("发送降落命令")
+            self.get_logger().info("🛬 發送降落命令，返回 IDLE 狀態")
         
         elif command == 'HOLD':
             # 紧急悬停（立即清零速度）
@@ -210,7 +200,7 @@ class OffboardControl(Node):
             self.velocity.y = 0.0
             self.velocity.z = 0.0
             self.yaw = 0.0
-            self.get_logger().info("紧急悬停：速度清零")
+            self.get_logger().info("⏸️  紧急悬停：速度清零")
         
         elif command == 'START_SCAN':
             # 启动扫描

@@ -251,11 +251,9 @@ class KeyboardCommander:
 ══════════════════════════════════════════════════════════════
 多无人机键盘控制台 - Multi-Drone Keyboard Commander
 ══════════════════════════════════════════════════════════════
-基本控制：
-  SPACE  : ARM/DISARM 选中的无人机
-  T      : 起飞到 2.5m
-  O      : 进入 Offboard 模式
-  L      : 降落
+基本控制（自動化流程）：
+  SPACE  : 解锁 + 起飛 2.5m + 進入 Offboard 模式
+  L      : 降落（降落後自動上鎖）
   H      : 紧急悬停（立即停止移动）
 
 扫描控制：
@@ -355,22 +353,12 @@ class KeyboardCommander:
             print("⚠️  请先选择无人机（按 1/2/3/A）")
             return
         
-        # ARM/DISARM
+        # SPACE: 自動 ARM + TAKEOFF + OFFBOARD
         if key == ' ':
             self._send_command_to_selected('ARM_TOGGLE')
-            print(f"✈️  ARM/DISARM: {sorted(self.selected_drones)}")
+            print(f"✈️  解鎖+起飛+Offboard: {sorted(self.selected_drones)}")
         
-        # 起飞
-        elif key == 't' or key == 'T':
-            self._send_command_to_selected('TAKEOFF')
-            print(f"🚁 起飞命令: {sorted(self.selected_drones)}")
-        
-        # Offboard 模式
-        elif key == 'o' or key == 'O':
-            self._send_command_to_selected('OFFBOARD')
-            print(f"🎯 进入 Offboard 模式: {sorted(self.selected_drones)}")
-        
-        # 降落
+        # 降落（降落後自動上鎖）
         elif key == 'l' or key == 'L':
             self._send_command_to_selected('LAND')
             print(f"🛬 降落命令: {sorted(self.selected_drones)}")
