@@ -29,6 +29,13 @@ def launch_setup(context, *args, **kwargs):
     # 获取 drone_id 的实际值
     drone_id = LaunchConfiguration('drone_id').perform(context)
     
+    # 0. MicroXRCE-DDS Agent（連接 Pixhawk）
+    micro_xrce_agent = ExecuteProcess(
+        cmd=['MicroXRCEAgent', 'serial', '-D', '/dev/ttyUSB0', '-b', '921600'],
+        name='micro_xrce_agent',
+        output='screen',
+    )
+    
     # 1. fast_scan_node（扫描 Meshtastic）
     fast_scan_node = Node(
         package='ros2_px4_offboard_example',
@@ -62,17 +69,8 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
     
-    # 3. processes 節點（連接 MicroXRCEAgent）
-    processes_node = Node(
-        package='ros2_px4_offboard_example',
-        executable='processes',
-        name='processes',
-        output='screen',
-        emulate_tty=True,
-    )
-    
     return [
-        processes_node,  # 先啟動 MicroXRCEAgent 連接
+        micro_xrce_agent,  # 先啟動 MicroXRCE-DDS Agent
         fast_scan_node,
         velocity_control_node,
     ]
