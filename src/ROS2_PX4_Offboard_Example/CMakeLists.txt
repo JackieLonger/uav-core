@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(ros2_px4_offboard_example)
 
-# 設定 C++ 標準（可保留以防含 C++ 節點）
+# 設定 C++ 標準
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
@@ -17,7 +17,7 @@ find_package(rclpy REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(meshtastic_ros_bridge_msgs REQUIRED)
 
-# 安裝 Python 套件 (指定實際套件名稱)
+# 安裝 Python 套件
 ament_python_install_package(px4_offboard)
 
 # 安裝 Python 可執行檔
@@ -30,10 +30,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# 安裝啟動檔（從頂層 launch 目錄）
+# 安裝啟動檔
 install(DIRECTORY
   launch/
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
 ament_package()
+

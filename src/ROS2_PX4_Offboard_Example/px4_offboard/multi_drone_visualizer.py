@@ -63,6 +63,10 @@ class MultiDroneVisualizer(Node):
                 'snr_history': deque(maxlen=1000),
                 'position_history': deque(maxlen=1000),
                 'timestamp_history': deque(maxlen=1000),
+                # 安全範圍數據（訂閱自 velocity_control.py）
+                'safety_origin': None,
+                'current_position_from_control': None,
+                'safety_boundary_markers': [],
             }
         
         self.get_logger().info(f"可视化器启动，绑定信息：")
@@ -99,6 +103,33 @@ class MultiDroneVisualizer(Node):
                 Twist,
                 f'/drone_{drone_id}/offboard_velocity_cmd',
                 lambda msg, did=drone_id: self.velocity_callback(msg, did),
+                10,
+                callback_group=self.callback_group
+            )
+            
+            # 安全範圍原點
+            self.create_subscription(
+                PoseStamped,
+                f'/drone_{drone_id}/safety_origin',
+                lambda msg, did=drone_id: self.safety_origin_callback(msg, did),
+                10,
+                callback_group=self.callback_group
+            )
+            
+            # 當前位置（來自 velocity_control 的邊界檢查版本）
+            self.create_subscription(
+                PoseStamped,
+                f'/drone_{drone_id}/current_position',
+                lambda msg, did=drone_id: self.safety_position_callback(msg, did),
+                10,
+                callback_group=self.callback_group
+            )
+            
+            # 安全邊界框
+            self.create_subscription(
+                MarkerArray,
+                f'/drone_{drone_id}/safety_boundary',
+                lambda msg, did=drone_id: self.safety_boundary_callback(msg, did),
                 10,
                 callback_group=self.callback_group
             )
@@ -249,6 +280,29 @@ class MultiDroneVisualizer(Node):
         """接收速度指令"""
         self.drone_states[drone_id]['velocity'] = msg
     
+    def safety_origin_callback(self, msg: PoseStamped, drone_id: int):
+        """接收安全範圍原點"""
+        state = self.drone_states[drone_id]
+        state['safety_origin'] = Point(
+            x=msg.pose.position.x,
+            y=msg.pose.position.y,
+            z=msg.pose.position.z
+        )
+    
+    def safety_position_callback(self, msg: PoseStamped, drone_id: int):
+        """接收當前位置（來自邊界檢查）"""
+        state = self.drone_states[drone_id]
+        state['current_position_from_control'] = Point(
+            x=msg.pose.position.x,
+            y=msg.pose.position.y,
+            z=msg.pose.position.z
+        )
+    
+    def safety_boundary_callback(self, msg: MarkerArray, drone_id: int):
+        """接收安全邊界框"""
+        state = self.drone_states[drone_id]
+        state['safety_boundary_markers'] = msg.markers if msg.markers else []
+    
     def publish_visualization(self):
         """发布可视化标记"""
         markers = MarkerArray()
@@ -257,6 +311,15 @@ class MultiDroneVisualizer(Node):
         # 注释: 不再显示固定的地面 Tracker 位置
         # 因为每架无人机绑定不同的 Tracker
         # Tracker 信息显示在无人机标签上
+        
+        # ========== 首先添加來自 velocity_control 的安全邊界框 ==========
+        for drone_id, state in self.drone_states.items():
+            if state['safety_boundary_markers']:
+                for marker in state['safety_boundary_markers']:
+                    marker.id = marker_id
+                    marker.ns = f"safety_boundary_drone_{drone_id}"
+                    markers.markers.append(marker)
+                    marker_id += 1
         
         # 开始显示每架无人机
         for drone_id, state in self.drone_states.items():
