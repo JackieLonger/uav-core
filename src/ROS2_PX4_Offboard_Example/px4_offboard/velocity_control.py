@@ -283,6 +283,15 @@ class OffboardControl(Node):
     #callback function that arms, takes off, and switches to offboard mode
     #implements a finite state machine
     def arm_timer_callback(self):
+        # ✅ 每 1 秒打印一次狀態（方便調試）
+        if self.myCnt % 50 == 0:
+            self.get_logger().info(
+                f"[狀態機] 當前: {self.current_state} | "
+                f"arm_msg: {self.arm_message} | "
+                f"arm_state: {self.arm_state} | "
+                f"flightCheck: {self.flightCheck} | "
+                f"nav_state: {self.nav_state}"
+            )
 
         match self.current_state:
             case "IDLE":
@@ -290,7 +299,7 @@ class OffboardControl(Node):
                     # ✅ 進入 PREARM 狀態，開始預發送 setpoint
                     self.current_state = "PREARM"
                     self.prearm_setpoint_count = 0
-                    self.get_logger().info("🔄 進入 PREARM 狀態，預發送 Offboard Setpoints...")
+                    self.get_logger().info("🔄 IDLE → PREARM（預發送 Offboard Setpoints）")
             
             # ✅ 新增 PREARM 狀態：持續發送 setpoint 直到 PX4 準備好
             case "PREARM":
@@ -298,15 +307,15 @@ class OffboardControl(Node):
                     # 用戶取消
                     self.current_state = "IDLE"
                     self.prearm_setpoint_count = 0
-                    self.get_logger().info("PREARM 取消")
+                    self.get_logger().info("❌ PREARM → IDLE（用戶取消）")
                 elif self.prearm_setpoint_count >= self.PREARM_SETPOINT_REQUIRED:
                     # 已發送足夠的 setpoint，檢查 flightCheck
                     if self.flightCheck:
                         self.current_state = "ARMING"
-                        self.get_logger().info("✅ PREARM 完成，pre_flight_checks_pass=True，開始 ARMING")
+                        self.get_logger().info("✅ PREARM → ARMING（pre_flight_checks_pass=True）")
                     else:
                         # flightCheck 仍為 False，繼續等待
-                        self.get_logger().warning(f"⏳ 等待 pre_flight_checks_pass (當前: {self.flightCheck})，已發送 {self.prearm_setpoint_count} 次 setpoint")
+                        self.get_logger().warning(f"⏳ PREARM 等待 flightCheck（當前: {self.flightCheck}，已發送 {self.prearm_setpoint_count} 次）")
                         self.prearm_setpoint_count = 0  # 重置計數器繼續發送
                 else:
                     self.prearm_setpoint_count += 1
@@ -316,25 +325,25 @@ class OffboardControl(Node):
             case "ARMING":
                 if not self.arm_message:
                     self.current_state = "IDLE"
-                    self.get_logger().info("ARMING 取消")
+                    self.get_logger().info("❌ ARMING → IDLE（用戶取消）")
                 elif(not(self.flightCheck)):
                     self.current_state = "IDLE"
-                    self.get_logger().info(f"Arming, Flight Check Failed")
+                    self.get_logger().info("❌ ARMING → IDLE（flightCheck失敗）")
                 elif(self.arm_state == 2 and self.myCnt > 10):  # ARMING_STATE_ARMED = 2
                     self.current_state = "TAKEOFF"
-                    self.get_logger().info(f"Arming, Takeoff")
+                    self.get_logger().info("✅ ARMING → TAKEOFF（已解鎖）")
                 self.arm() #send arm command
 
             case "TAKEOFF":
                 if not self.arm_message:
                     self.current_state = "IDLE"
-                    self.get_logger().info("TAKEOFF 取消")
+                    self.get_logger().info("❌ TAKEOFF → IDLE（用戶取消）")
                 elif(not(self.flightCheck)):
                     self.current_state = "IDLE"
-                    self.get_logger().info(f"Takeoff, Flight Check Failed")
+                    self.get_logger().info("❌ TAKEOFF → IDLE（flightCheck失敗）")
                 elif(self.nav_state == VehicleStatus.NAVIGATION_STATE_AUTO_TAKEOFF):
                     self.current_state = "LOITER"
-                    self.get_logger().info(f"Takeoff, Loiter")
+                    self.get_logger().info("✅ TAKEOFF → LOITER（PX4進入起飛模式）")
                 self.arm() #send arm command
                 self.take_off() #send takeoff command
 
@@ -343,20 +352,20 @@ class OffboardControl(Node):
             case "LOITER": 
                 if not self.arm_message:
                     self.current_state = "IDLE"
-                    self.get_logger().info("LOITER 取消")
+                    self.get_logger().info("❌ LOITER → IDLE（用戶取消）")
                 elif(not(self.flightCheck)):
                     self.current_state = "IDLE"
-                    self.get_logger().info(f"Loiter, Flight Check Failed")
+                    self.get_logger().info("❌ LOITER → IDLE（flightCheck失敗）")
                 elif(self.nav_state == VehicleStatus.NAVIGATION_STATE_AUTO_LOITER):
                     # 到達 Loiter 狀態，切換到 Offboard
                     self.current_state = "OFFBOARD"
-                    self.get_logger().info(f"✅ Loiter 完成，切換到 Offboard (高度: {self.current_altitude:.2f}m)")
+                    self.get_logger().info(f"✅ LOITER → OFFBOARD（PX4進入LOITER，高度: {self.current_altitude:.2f}m）")
                 elif self.current_altitude >= (self.takeoff_target_altitude - 0.3):
                     # 已達目標高度（容錯 0.3m），直接切換到 Offboard
                     self.current_state = "OFFBOARD"
-                    self.get_logger().info(f"✅ 已達目標高度 ({self.current_altitude:.2f}m)，切換到 Offboard")
+                    self.get_logger().info(f"✅ LOITER → OFFBOARD（已達目標高度 {self.current_altitude:.2f}m）")
                 elif(self.myCnt > 300):  # 30 秒超時（給足時間起飛）
-                    self.get_logger().warning(f"⚠️ LOITER 超時 (高度: {self.current_altitude:.2f}m, nav_state: {self.nav_state})，強制進入 OFFBOARD")
+                    self.get_logger().warning(f"⚠️ LOITER 超時（高度: {self.current_altitude:.2f}m, nav_state: {self.nav_state}），強制 → OFFBOARD")
                     self.current_state = "OFFBOARD"
                 self.arm()
 

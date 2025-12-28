@@ -127,6 +127,24 @@ class Position:
         )
 
 
+# 掃描序列狀態枚舉
+class ScanPhase:
+    INIT = "INIT"                    # 初始化，等待位置數據
+    ORIGIN_SCAN = "ORIGIN_SCAN"      # 原點掃描
+    MOVE_FRONT = "MOVE_FRONT"        # 移動到前方
+    FRONT_SCAN = "FRONT_SCAN"        # 前方掃描
+    MOVE_BACK = "MOVE_BACK"          # 移動到後方
+    BACK_SCAN = "BACK_SCAN"          # 後方掃描
+    MOVE_LEFT = "MOVE_LEFT"          # 移動到左方
+    LEFT_SCAN = "LEFT_SCAN"          # 左方掃描
+    MOVE_RIGHT = "MOVE_RIGHT"        # 移動到右方
+    RIGHT_SCAN = "RIGHT_SCAN"        # 右方掃描
+    CHOOSE_BEST = "CHOOSE_BEST"      # 選擇最佳點
+    MOVE_TO_BEST = "MOVE_TO_BEST"    # 移動到最佳點
+    HOVERING = "HOVERING"            # 懸停監控（已到達最佳點）
+    DONE = "DONE"                    # 完成
+
+
 @dataclass
 class DroneState:
     """单个无人机的状态（线程安全）"""
@@ -155,6 +173,28 @@ class DroneState:
     
     # 质量历史
     quality_history: deque = field(default_factory=lambda: deque(maxlen=10))
+    
+    # ========== 掃描序列狀態 ==========
+    scan_phase: str = ScanPhase.INIT           # 當前掃描階段
+    origin_xy: Optional[Tuple[float, float]] = None  # 原點 XY 座標
+    scan_scores: Dict[str, float] = field(default_factory=dict)  # 各點品質分數
+    best_direction: Optional[str] = None       # 最佳方向 (front/back/left/right/origin)
+    target_xy: Optional[Tuple[float, float]] = None  # 目標位置（移動到最佳點時使用）
+    move_start_time: float = 0.0               # 移動開始時間
+    is_moving: bool = False                    # 是否正在移動中
+    scan_start_time: float = 0.0               # 掃描開始時間（用於超時保護）
+    current_cycle_id: int = 0                  # 當前掃描輪次 ID
+    
+    def cycle_complete(self) -> bool:
+        """檢查當前輪次五點是否都已掃描"""
+        required = {'origin', 'front', 'back', 'left', 'right'}
+        return required.issubset(self.scan_scores.keys())
+    
+    def start_new_cycle(self):
+        """開始新的掃描輪次"""
+        self.current_cycle_id += 1
+        self.scan_scores = {}  # 清空上一輪分數
+        self.reset_tracker_flags()
     
     def both_trackers_ready(self) -> bool:
         """两个信号都到了"""
@@ -188,12 +228,21 @@ class DroneState:
             if target_id not in self.dynamic_tracker_ids:
                 return
             
-            # 安全地轉換 RSSI/SNR 為浮點數（可能是字符串或空值）
-            def safe_float(val):
-                try:
-                    return float(val) if val else 0.0
-                except (ValueError, TypeError):
-                    return 0.0
+            # 安全地轉換 RSSI/SNR 為浮點數（處理字符串、空值、N/A）
+            def safe_float(val, default=0.0):
+                if val is None:
+                    return default
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if isinstance(val, str):
+                    val_str = val.strip().upper()
+                    if val_str in ('N/A', 'NA', 'NONE', ''):
+                        return default
+                    try:
+                        return float(val)
+                    except ValueError:
+                        return default
+                return default
             
             tracker_data = TrackerData(
                 target_id=target_id,
@@ -303,8 +352,8 @@ class KeyboardCommander:
         )
         self.keyboard_thread.start()
         
-        # 启动状态显示定时器（2秒刷新一次）
-        self.status_timer = self.create_timer(2.0, self._display_status)
+        # ❌ 移除定时刷新，改为按键触发刷新
+        # self.status_timer = self.create_timer(2.0, self._display_status)
         
         # 显示帮助信息
         print(self.HELP_MSG)
@@ -352,34 +401,40 @@ class KeyboardCommander:
         # SPACE: 自动起飞流程 ARM → TAKEOFF → OFFBOARD
         if key == ' ':
             self._send_command_to_selected('ARM_TOGGLE')
-            print(f"🚀 自动起飞: ARM → TAKEOFF(2.5m) → OFFBOARD: {sorted(self.selected_drones)}")
+            print(f"\n🚀 自动起飞: ARM → TAKEOFF(2.5m) → OFFBOARD: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # L: 降落
         elif key == 'l' or key == 'L':
             self._send_command_to_selected('LAND')
-            print(f"🛬 降落命令: {sorted(self.selected_drones)}")
+            print(f"\n🛬 降落命令: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # H: 紧急悬停
         elif key == 'h' or key == 'H':
             self._send_command_to_selected('HOLD')
-            print(f"⏸️  紧急悬停: {sorted(self.selected_drones)}")
+            print(f"\n⏸️  紧急悬停: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # 启动扫描
         elif key == 'f' or key == 'F':
             self.scan_enabled = True
             self._send_command_to_selected('START_SCAN')
-            print(f"📡 信号扫描已启动: {sorted(self.selected_drones)}")
+            print(f"\n📡 信号扫描已启动: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # 停止扫描
         elif key == 'g' or key == 'G':
             self.scan_enabled = False
             self._send_command_to_selected('STOP_SCAN')
-            print(f"⏹️  信号扫描已停止: {sorted(self.selected_drones)}")
+            print(f"\n⏹️  信号扫描已停止: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # 开始优化
         elif key == 's' or key == 'S':
             self.optimization_enabled = True
-            print("🔍 信号优化已启动")
+            print("\n🔍 信号优化已启动")
+            self._display_status()
         
         # 暂停优化
         elif key == 'p' or key == 'P':
@@ -389,21 +444,24 @@ class KeyboardCommander:
                 if drone_id in self.drone_states:
                     with self.drone_states[drone_id].lock:
                         self.drone_states[drone_id].current_velocity = (0.0, 0.0, 0.0)
-            print("⏸️  信号优化已暂停")
+            print("\n⏸️  信号优化已暂停")
+            self._display_status()
         
         # 选择单个无人机
         elif key in ['1', '2', '3']:
             drone_id = int(key)
             if drone_id in self.drone_states:
                 self.selected_drones = {drone_id}
-                print(f"✓ 已选择 Drone {drone_id}")
+                print(f"\n✓ 已选择 Drone {drone_id}")
+                self._display_status()
             else:
-                print(f"⚠️  Drone {drone_id} 不存在")
+                print(f"\n⚠️  Drone {drone_id} 不存在")
         
         # 选择所有无人机
         elif key == 'a' or key == 'A':
             self.selected_drones = set(self.drone_states.keys())
-            print(f"✓ 已选择所有无人机: {sorted(self.selected_drones)}")
+            print(f"\n✓ 已选择所有无人机: {sorted(self.selected_drones)}")
+            self._display_status()
         
         # 退出
         elif key == 'q' or key == 'Q':
@@ -415,6 +473,7 @@ class KeyboardCommander:
         # 帮助
         elif key == '?':
             print(self.HELP_MSG)
+            self._display_status()
     
     def _send_command_to_selected(self, command: str):
         """向选中的无人机发送命令"""
@@ -452,27 +511,24 @@ class KeyboardCommander:
 
 
 class MultiDroneSignalOptimizer(Node, KeyboardCommander):
-    """多无人机信号优化器（多线程异步 + 键盘控制）"""
+    """多无人机信号优化器（多线程異步 + 鍵盤控制）"""
     
     # 常量配置
-    MAX_MOVEMENTS = 5
-    MAX_VELOCITY = 0.3  # m/s
-    ALTITUDE_THRESHOLD = 1.5  # 优先上升到 1.5m
-    PUBLISH_RATE = 100.0  # Hz (100Hz for PX4 Offboard)
+    MAX_MOVEMENTS = 10           # 最大移動次數（包含邊界掃描）
+    MAX_VELOCITY = 0.2           # m/s（降低速度，更精確）
+    SCAN_VELOCITY = 0.15         # m/s（掃描移動速度，更慢更穩）
+    ALTITUDE_TARGET = 2.0        # 固定高度 2.0m（XY平面掃描）
+    ALTITUDE_THRESHOLD = 1.5     # 舊參數保留相容
+    PUBLISH_RATE = 100.0         # Hz (100Hz for PX4 Offboard)
+    MOVE_DURATION = 4.0          # 每次移動持續時間（秒）
+    SCAN_WAIT_TIMEOUT = 120.0    # 掃描等待超時（秒）
+    ARRIVAL_THRESHOLD = 0.20     # 到達判定距離（米）
     
-    # 边界（相对于 takeoff_position）
-    BOUNDS_X = (-1.5, 1.5)
-    BOUNDS_Y = (-1.5, 1.5)
-    BOUNDS_Z = (0.0, 3.0)  # NED: 0.0(起飞点) 到 3.0(起飞点上方3米)
-    # 注意：NED 坐标系中，Z 轴向下为正。
-    # 如果 takeoff_position.z 是 -10m (海拔 10m)
-    # 我們希望飛到 -13m (海拔 13m)
-    # 所以相對高度應該是負值。
-    # 但這裡的邏輯是基於 current_altitude = takeoff_pos.z - current_pos.z
-    # current_altitude > 0 代表在起飛點上方
-    # 所以 BOUNDS_Z = (0.0, 3.0) 代表允許在起飛點上方 0~3 米範圍內移動
-    BOUNDS_Y = (-1.5, 1.5)
-    BOUNDS_Z = (0.0, 3.0)  # 只能上升
+    # 邊界（相對於 origin_xy）
+    SCAN_DISTANCE = 1.2          # 掃描點與原點的距離（米）
+    BOUNDS_X = (-1.5, 1.5)       # X 軸邊界（±1.5m）
+    BOUNDS_Y = (-1.5, 1.5)       # Y 軸邊界（±1.5m）
+    BOUNDS_Z = (0.0, 3.0)        # Z 軸邊界（只能上升 0~3m）
     
     def __init__(self):
         # 初始化 Node
@@ -788,72 +844,422 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
     
     def decision_loop(self, drone_id: int):
         """
-        单个无人机的决策循环（独立线程）
+        單個無人機的決策循環（獨立線程）
         
-        每次两个 tracker 信号都到达后才决策
+        掃描序列狀態機：
+        INIT → ORIGIN_SCAN → MOVE_FRONT → FRONT_SCAN → MOVE_BACK → BACK_SCAN
+             → MOVE_LEFT → LEFT_SCAN → MOVE_RIGHT → RIGHT_SCAN
+             → MOVE_TO_BEST → TRACKING → DONE
         """
-        self.get_logger().info(f"Drone {drone_id}: 决策线程启动")
+        self.get_logger().info(f"Drone {drone_id}: 決策線程啟動（邊界掃描模式）")
         state = self.drone_states[drone_id]
         
         while self.running:
             try:
-                # 检查优化是否启用
+                # 檢查優化是否啟用
                 if not self.optimization_enabled:
                     with state.lock:
                         state.current_velocity = (0.0, 0.0, 0.0)
                     time.sleep(0.5)
                     continue
                 
-                # 检查是否达到移动限制
-                if state.movement_count >= self.MAX_MOVEMENTS:
+                # 根據當前階段執行對應邏輯
+                phase = state.scan_phase
+                
+                # ========== INIT: 等待位置數據並鎖定原點 ==========
+                if phase == ScanPhase.INIT:
+                    with state.lock:
+                        if state.current_position.x == 0.0 and state.current_position.y == 0.0:
+                            # 尚未收到位置數據
+                            time.sleep(0.5)
+                            continue
+                        # 鎖定原點 XY
+                        state.origin_xy = (state.current_position.x, state.current_position.y)
+                        state.scan_scores = {}  # 清空評分
+                        state.scan_phase = ScanPhase.ORIGIN_SCAN
+                    self.get_logger().info(
+                        f"Drone {drone_id}: 🎯 原點鎖定 ({state.origin_xy[0]:.2f}, {state.origin_xy[1]:.2f})，開始原點掃描"
+                    )
+                
+                # ========== ORIGIN_SCAN: 原點掃描（等待兩個 Tracker 更新） ==========
+                elif phase == ScanPhase.ORIGIN_SCAN:
+                    with state.lock:
+                        state.current_velocity = (0.0, 0.0, 0.0)  # 懸停
+                    
+                    if state.both_trackers_ready():
+                        quality = state.calculate_current_quality()
+                        state.scan_scores['origin'] = quality
+                        state.reset_tracker_flags()
+                        state.scan_phase = ScanPhase.MOVE_FRONT
+                        self.get_logger().info(
+                            f"Drone {drone_id}: 📍 原點掃描完成，品質={quality:.3f}，準備移動到前方"
+                        )
+                    else:
+                        time.sleep(0.5)
+                        continue
+                
+                # ========== MOVE_FRONT: 移動到前方邊界 ==========
+                elif phase == ScanPhase.MOVE_FRONT:
+                    self._move_to_scan_point(drone_id, 'front', ScanPhase.FRONT_SCAN)
+                
+                # ========== FRONT_SCAN: 前方掃描 ==========
+                elif phase == ScanPhase.FRONT_SCAN:
+                    self._wait_and_scan(drone_id, 'front', ScanPhase.MOVE_BACK)
+                
+                # ========== MOVE_BACK: 移動到後方邊界（經過原點） ==========
+                elif phase == ScanPhase.MOVE_BACK:
+                    self._move_to_scan_point(drone_id, 'back', ScanPhase.BACK_SCAN)
+                
+                # ========== BACK_SCAN: 後方掃描 ==========
+                elif phase == ScanPhase.BACK_SCAN:
+                    self._wait_and_scan(drone_id, 'back', ScanPhase.MOVE_LEFT)
+                
+                # ========== MOVE_LEFT: 移動到左方邊界（經過原點） ==========
+                elif phase == ScanPhase.MOVE_LEFT:
+                    self._move_to_scan_point(drone_id, 'left', ScanPhase.LEFT_SCAN)
+                
+                # ========== LEFT_SCAN: 左方掃描 ==========
+                elif phase == ScanPhase.LEFT_SCAN:
+                    self._wait_and_scan(drone_id, 'left', ScanPhase.MOVE_RIGHT)
+                
+                # ========== MOVE_RIGHT: 移動到右方邊界（經過原點） ==========
+                elif phase == ScanPhase.MOVE_RIGHT:
+                    self._move_to_scan_point(drone_id, 'right', ScanPhase.RIGHT_SCAN)
+                
+                # ========== RIGHT_SCAN: 右方掃描 ==========
+                elif phase == ScanPhase.RIGHT_SCAN:
+                    self._wait_and_scan(drone_id, 'right', ScanPhase.CHOOSE_BEST)
+                
+                # ========== CHOOSE_BEST: 選擇最佳點並設定目標 ==========
+                elif phase == ScanPhase.CHOOSE_BEST:
+                    self._select_best_point(drone_id)
+                
+                # ========== MOVE_TO_BEST: 移動到最佳點（持續檢查距離） ==========
+                elif phase == ScanPhase.MOVE_TO_BEST:
+                    self._move_to_best_point(drone_id)
+                
+                # ========== HOVERING: 懸停監控（已到達最佳點） ==========
+                elif phase == ScanPhase.HOVERING:
+                    with state.lock:
+                        state.current_velocity = (0.0, 0.0, 0.0)  # 懸停
+                    
+                    if state.both_trackers_ready():
+                        quality = state.calculate_current_quality()
+                        best_dir = state.best_direction
+                        best_score = state.scan_scores.get(best_dir, 0.0)
+                        
+                        self.get_logger().info(
+                            f"Drone {drone_id}: 📍 懸停中 - 當前品質={quality:.3f}，最佳點={best_dir}({best_score:.3f})"
+                        )
+                        state.reset_tracker_flags()
+                        state.current_quality = quality
+                        state.quality_history.append(quality)
+                    
+                    time.sleep(1.0)
+                
+                # ========== DONE: 完成 ==========
+                elif phase == ScanPhase.DONE:
                     with state.lock:
                         state.current_velocity = (0.0, 0.0, 0.0)
                     time.sleep(1.0)
-                    continue
                 
-                # 等待两个 tracker 信号都到
-                if not state.both_trackers_ready():
-                    with state.lock:
-                        state.current_velocity = (0.0, 0.0, 0.0)
+                else:
                     time.sleep(0.5)
-                    continue
-                
-                # 计算速度
-                vx, vy, vz = self.calculate_velocity(drone_id)
-                
-                # 更新速度
-                with state.lock:
-                    state.current_velocity = (vx, vy, vz)
-                    state.movement_count += 1
-                
-                # 重置 tracker flags
-                state.reset_tracker_flags()
-                
-                self.get_logger().info(
-                    f"Drone {drone_id}: 移动 {state.movement_count}/{self.MAX_MOVEMENTS}, "
-                    f"速度 ({vx:.2f}, {vy:.2f}, {vz:.2f}), "
-                    f"质量 {state.current_quality:.3f}"
-                )
-                
-                # 移动约 3 秒后，重置速度为零（悬停等待下一轮扫描）
-                time.sleep(3.0)
-                
-                # 重置速度为零，无人机悬停等待下一轮 Tracker 扫描
-                with state.lock:
-                    state.current_velocity = (0.0, 0.0, 0.0)
-                
-                self.get_logger().info(
-                    f"Drone {drone_id}: 移动完成，悬停等待下一轮扫描"
-                )
-                
-                # 等待下一轮扫描（约 120 秒）- 已在悬停状态
-                time.sleep(1.0)
                 
             except Exception as e:
-                self.get_logger().error(f"Drone {drone_id}: 决策循环异常: {e}")
+                self.get_logger().error(f"Drone {drone_id}: 決策循環異常: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(1.0)
         
-        self.get_logger().info(f"Drone {drone_id}: 决策线程退出")
+        self.get_logger().info(f"Drone {drone_id}: 決策線程退出")
+    
+    def _get_scan_point_offset(self, direction: str) -> Tuple[float, float]:
+        """
+        獲取掃描點相對於原點的偏移量
+        
+        Args:
+            direction: 'front', 'back', 'left', 'right'
+        
+        Returns:
+            (dx, dy) 相對原點的偏移
+        """
+        d = self.SCAN_DISTANCE
+        offsets = {
+            'front': (d, 0.0),    # +X 方向
+            'back': (-d, 0.0),    # -X 方向
+            'left': (0.0, -d),    # -Y 方向（NED 座標系）
+            'right': (0.0, d),    # +Y 方向
+            'origin': (0.0, 0.0)
+        }
+        return offsets.get(direction, (0.0, 0.0))
+    
+    def _move_to_scan_point(self, drone_id: int, direction: str, next_phase: str):
+        """
+        移動到指定掃描點
+        
+        Args:
+            drone_id: 無人機 ID
+            direction: 目標方向 ('front', 'back', 'left', 'right')
+            next_phase: 移動完成後的下一階段
+        """
+        state = self.drone_states[drone_id]
+        
+        with state.lock:
+            if state.origin_xy is None:
+                state.scan_phase = ScanPhase.INIT
+                return
+            
+            origin_x, origin_y = state.origin_xy
+            current_x = state.current_position.x
+            current_y = state.current_position.y
+            
+            # 目標位置
+            dx, dy = self._get_scan_point_offset(direction)
+            target_x = origin_x + dx
+            target_y = origin_y + dy
+            
+            # 確保不超出邊界
+            target_x = max(origin_x + self.BOUNDS_X[0], min(origin_x + self.BOUNDS_X[1], target_x))
+            target_y = max(origin_y + self.BOUNDS_Y[0], min(origin_y + self.BOUNDS_Y[1], target_y))
+            
+            # 計算距離
+            dist_x = target_x - current_x
+            dist_y = target_y - current_y
+            dist = math.sqrt(dist_x**2 + dist_y**2)
+            
+            # 如果已經接近目標，進入下一階段
+            if dist < 0.1:
+                state.current_velocity = (0.0, 0.0, 0.0)
+                state.is_moving = False
+                state.scan_phase = next_phase
+                state.movement_count += 1
+                self.get_logger().info(
+                    f"Drone {drone_id}: ✅ 到達 {direction} 掃描點，開始掃描"
+                )
+                return
+            
+            # 開始移動或持續移動
+            if not state.is_moving:
+                state.is_moving = True
+                state.move_start_time = time.time()
+                self.get_logger().info(
+                    f"Drone {drone_id}: 🚀 移動到 {direction} (距離: {dist:.2f}m)"
+                )
+            
+            # 檢查移動超時（防止卡住）
+            if time.time() - state.move_start_time > self.MOVE_DURATION * 3:
+                state.current_velocity = (0.0, 0.0, 0.0)
+                state.is_moving = False
+                state.scan_phase = next_phase
+                state.movement_count += 1
+                self.get_logger().warn(
+                    f"Drone {drone_id}: ⚠️ 移動超時，強制進入 {direction} 掃描"
+                )
+                return
+            
+            # 計算速度（朝向目標）
+            if dist > 0.01:
+                vx = (dist_x / dist) * self.SCAN_VELOCITY
+                vy = (dist_y / dist) * self.SCAN_VELOCITY
+            else:
+                vx, vy = 0.0, 0.0
+            
+            # 固定高度（vz = 0）
+            state.current_velocity = (vx, vy, 0.0)
+        
+        time.sleep(0.1)  # 100ms 更新週期
+    
+    def _wait_and_scan(self, drone_id: int, point_name: str, next_phase: str):
+        """
+        等待掃描完成並記錄品質（帶超時保護）
+        
+        Args:
+            drone_id: 無人機 ID
+            point_name: 掃描點名稱
+            next_phase: 掃描完成後的下一階段
+        """
+        state = self.drone_states[drone_id]
+        
+        with state.lock:
+            state.current_velocity = (0.0, 0.0, 0.0)  # 懸停
+            
+            # 初始化掃描計時器
+            if state.scan_start_time == 0.0:
+                state.scan_start_time = time.time()
+                self.get_logger().info(
+                    f"Drone {drone_id}: ⏳ {point_name} 掃描中...等待兩個 Tracker 回報"
+                )
+        
+        # 檢查是否兩個 Tracker 都就緒
+        if state.both_trackers_ready():
+            quality = state.calculate_current_quality()
+            state.scan_scores[point_name] = quality
+            state.reset_tracker_flags()
+            state.scan_start_time = 0.0  # 重置計時器
+            state.scan_phase = next_phase
+            self.get_logger().info(
+                f"Drone {drone_id}: ✅ {point_name} 掃描完成，品質={quality:.3f}"
+            )
+        # 超時保護
+        elif time.time() - state.scan_start_time > self.SCAN_WAIT_TIMEOUT:
+            self.get_logger().warn(
+                f"Drone {drone_id}: ⚠️ {point_name} 掃描超時（{self.SCAN_WAIT_TIMEOUT:.0f}s），記 0 分並繼續"
+            )
+            state.scan_scores[point_name] = 0.0  # 超時給 0 分
+            state.reset_tracker_flags()
+            state.scan_start_time = 0.0
+            state.scan_phase = next_phase
+        else:
+            time.sleep(0.5)  # 繼續等待
+    
+    def _choose_and_move_to_best(self, drone_id: int):
+        """[DEPRECATED] 已拆分為 _select_best_point 和 _move_to_best_point"""
+        pass
+    
+    def _select_best_point(self, drone_id: int):
+        """
+        選擇最佳掃描點並設定目標位置
+        
+        Args:
+            drone_id: 無人機 ID
+        """
+        state = self.drone_states[drone_id]
+        
+        with state.lock:
+            scores = state.scan_scores
+            if not scores:
+                state.scan_phase = ScanPhase.DONE
+                self.get_logger().warn(f"Drone {drone_id}: 無掃描數據，結束")
+                return
+            
+            # 找出最佳方向
+            best_dir = max(scores, key=scores.get)
+            best_score = scores[best_dir]
+            state.best_direction = best_dir
+            
+            self.get_logger().info(
+                f"Drone {drone_id}: 🏆 五點掃描結果: {scores}"
+            )
+            self.get_logger().info(
+                f"Drone {drone_id}: 🎯 最佳方向: {best_dir} (品質={best_score:.3f})"
+            )
+            
+            # 如果最佳是原點，直接進入懸停
+            if best_dir == 'origin':
+                state.target_xy = state.origin_xy
+                state.scan_phase = ScanPhase.HOVERING
+                self.get_logger().info(
+                    f"Drone {drone_id}: 📍 原點最佳，保持原地懸停"
+                )
+                return
+            
+            # 計算目標位置（相對原點偏移，嚴格限制在 ±1.5m）
+            origin_x, origin_y = state.origin_xy
+            dx, dy = self._get_scan_point_offset(best_dir)
+            
+            # 目標位置 = 原點 + 偏移，但不超出邊界
+            target_x = origin_x + dx
+            target_y = origin_y + dy
+            
+            # 嚴格邊界檢查（±1.5m）
+            target_x = max(origin_x + self.BOUNDS_X[0], min(origin_x + self.BOUNDS_X[1], target_x))
+            target_y = max(origin_y + self.BOUNDS_Y[0], min(origin_y + self.BOUNDS_Y[1], target_y))
+            
+            state.target_xy = (target_x, target_y)
+            state.is_moving = False
+            state.scan_phase = ScanPhase.MOVE_TO_BEST
+            
+            self.get_logger().info(
+                f"Drone {drone_id}: 🚀 準備移動到最佳點 ({target_x:.2f}, {target_y:.2f})"
+            )
+    
+    def _move_to_best_point(self, drone_id: int):
+        """
+        移動到最佳點（持續檢查距離，到達後停止）
+        
+        Args:
+            drone_id: 無人機 ID
+        """
+        state = self.drone_states[drone_id]
+        
+        with state.lock:
+            if state.target_xy is None:
+                state.scan_phase = ScanPhase.HOVERING
+                return
+            
+            target_x, target_y = state.target_xy
+            current_x = state.current_position.x
+            current_y = state.current_position.y
+            
+            # 計算與目標的距離
+            dist_x = target_x - current_x
+            dist_y = target_y - current_y
+            dist = math.sqrt(dist_x**2 + dist_y**2)
+            
+            # 如果已到達目標（誤差 < ARRIVAL_THRESHOLD）
+            if dist < self.ARRIVAL_THRESHOLD:
+                state.current_velocity = (0.0, 0.0, 0.0)
+                state.is_moving = False
+                state.scan_phase = ScanPhase.HOVERING
+                self.get_logger().info(
+                    f"Drone {drone_id}: ✅ 已到達最佳點 {state.best_direction}，開始懸停監控"
+                )
+                return
+            
+            # 開始移動或持續移動
+            if not state.is_moving:
+                state.is_moving = True
+                state.move_start_time = time.time()
+                self.get_logger().info(
+                    f"Drone {drone_id}: 🚁 移動中... (距離: {dist:.2f}m)"
+                )
+            
+            # 檢查移動超時（防止卡住）
+            if time.time() - state.move_start_time > self.MOVE_DURATION * 5:
+                state.current_velocity = (0.0, 0.0, 0.0)
+                state.is_moving = False
+                state.scan_phase = ScanPhase.HOVERING
+                self.get_logger().warn(
+                    f"Drone {drone_id}: ⚠️ 移動超時，強制進入懸停模式"
+                )
+                return
+            
+            # 計算速度（朝向目標）
+            if dist > 0.05:
+                vx = (dist_x / dist) * self.SCAN_VELOCITY
+                vy = (dist_y / dist) * self.SCAN_VELOCITY
+            else:
+                vx, vy = 0.0, 0.0
+            
+            # 嚴格邊界檢查：預測下一位置是否超出 ±1.5m
+            origin_x, origin_y = state.origin_xy
+            next_x = current_x + vx * 0.5  # 預測 0.5 秒後
+            next_y = current_y + vy * 0.5
+            
+            # 檢查 X 邊界
+            if next_x < origin_x + self.BOUNDS_X[0] or next_x > origin_x + self.BOUNDS_X[1]:
+                vx = 0.0
+                self.get_logger().warn(f"Drone {drone_id}: X 軸到達邊界，停止 X 方向移動")
+            
+            # 檢查 Y 邊界
+            if next_y < origin_y + self.BOUNDS_Y[0] or next_y > origin_y + self.BOUNDS_Y[1]:
+                vy = 0.0
+                self.get_logger().warn(f"Drone {drone_id}: Y 軸到達邊界，停止 Y 方向移動")
+            
+            # 如果兩軸都被清零，直接進入懸停
+            if vx == 0.0 and vy == 0.0:
+                state.is_moving = False
+                state.scan_phase = ScanPhase.HOVERING
+                self.get_logger().info(
+                    f"Drone {drone_id}: 📍 到達邊界，進入懸停模式"
+                )
+                return
+            
+            # 固定高度（vz = 0）
+            state.current_velocity = (vx, vy, 0.0)
+        
+        time.sleep(0.1)  # 100ms 更新週期
     
     def velocity_publish_loop(self, drone_id: int):
         """

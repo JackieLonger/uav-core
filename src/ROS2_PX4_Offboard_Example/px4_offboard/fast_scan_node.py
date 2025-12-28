@@ -82,6 +82,14 @@ class FastScanNode(Node):
             self.get_logger().info("⏹️  扫描已停止（收到远程命令）")
     
     def onReceive(self, packet, interface):
+        """
+        處理 Meshtastic 回應封包
+        
+        資料來源：
+        - return_rssi / return_snr：無人機直接量測（Tracker → 無人機）✅ 精確
+        - forward_snr：從 traceroute 的 snr_towards 取得 ✅ 精確
+        - forward_rssi：根據 SNR 差值估算（假設路徑損耗對稱）
+        """
         try:
             port = packet.get('decoded', {}).get('portnum')
             from_id = packet.get('fromId', 'unknown')
@@ -97,16 +105,25 @@ class FastScanNode(Node):
                         rd = None
                     
                     self.results['status'] = 'Success'
-                    self.results['return_rssi'] = packet.get('rxRssi', 0)
-                    self.results['return_snr'] = packet.get('rxSnr', 0)
                     
+                    # Return 方向：無人機直接量測（精確）- 確保是 float
+                    self.results['return_rssi'] = float(packet.get('rxRssi', 0))
+                    self.results['return_snr'] = float(packet.get('rxSnr', 0))
+                    
+                    # Forward 方向：從 traceroute snr_towards 取得
                     if rd and hasattr(rd, "snr_towards") and len(rd.snr_towards) > 0:
+                        # snr_towards 是 1/4 dB 單位，需要除以 4
                         forward_snr = rd.snr_towards[-1] / 4.0
-                        self.results['forward_snr'] = forward_snr
-                        self.results['forward_rssi'] = round(self.results['return_rssi'] + (forward_snr - self.results['return_snr']), 1)
+                        self.results['forward_snr'] = float(forward_snr)
+                        # Forward RSSI：根據 SNR 差值估算（假設路徑損耗對稱）
+                        self.results['forward_rssi'] = round(
+                            self.results['return_rssi'] + (forward_snr - self.results['return_snr']), 1
+                        )
                     else:
-                        self.results['forward_snr'] = 'N/A'
-                        self.results['forward_rssi'] = 'N/A'
+                        # 無 forward 資料時，使用 return 值作為備用（確保是 float）
+                        self.get_logger().warn(f"[onReceive] {from_id} 無 snr_towards，使用 return 值代替")
+                        self.results['forward_snr'] = self.results['return_snr']
+                        self.results['forward_rssi'] = self.results['return_rssi']
                     
                     self.response_event.set()
         except Exception as e:
