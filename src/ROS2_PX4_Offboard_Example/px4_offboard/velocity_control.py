@@ -181,10 +181,13 @@ class OffboardControl(Node):
         # ✅ 安全範圍保護
         self.offboard_entry_position = None  # 進入 Offboard 時的 3D 位置
         self.current_position = None  # 當前無人機位置
-        self.safety_bounds_x = (-1.5, 1.5)  # X 軸範圍（相對原點，米）
-        self.safety_bounds_y = (-1.5, 1.5)  # Y 軸範圍（相對原點，米）
-        self.safety_bounds_z = (0.0, 3.0)  # Z 軸範圍（相對高度，米）
-        self.boundary_check_enabled = True  # 邊界檢查開關
+        self.safety_bounds_x = (-1.2, 1.2)  # ✅ 縮小到 ±1.2m（與掃描點保持緩衝）
+        self.safety_bounds_y = (-1.2, 1.2)
+        self.safety_bounds_z = (0.0, 3.0)
+        self.boundary_check_enabled = True
+        
+        # ✅ 空中重啟檢測標記
+        self.airborne_restart_detected = False
         
         # RViz2 可視化發布器
         self.origin_pub = self.create_publisher(
@@ -264,10 +267,26 @@ class OffboardControl(Node):
     
     def position_callback(self, msg: VehicleLocalPosition):
         """接收位置信息，計算當前高度"""
-        # 初始化地面參考點（第一次接收位置時）
-        if self.ground_level_z is None and msg.z != 0.0:
+        # ✅ 只在未解鎖時設定地面參考點
+        if (self.ground_level_z is None and 
+            msg.z != 0.0 and
+            self.arm_state != VehicleStatus.ARMING_STATE_ARMED):
             self.ground_level_z = msg.z
             self.get_logger().info(f"地面參考點設定: Z = {self.ground_level_z:.2f}m (NED)")
+        
+        # ✅ 若已解鎖但 ground_level_z 仍為空，判定為空中重啟
+        elif (self.ground_level_z is None and 
+              msg.z != 0.0 and
+              self.arm_state == VehicleStatus.ARMING_STATE_ARMED):
+            self.ground_level_z = msg.z
+            self.airborne_restart_detected = True
+            self.get_logger().warning(
+                f"⚠️ 檢測到空中重啟！當前高度 {-msg.z:.2f}m，禁止自動起飛"
+            )
+            # 強制跳過起飛流程，進入 OFFBOARD
+            if self.current_state in ["IDLE", "PREARM", "ARMING", "TAKEOFF"]:
+                self.current_state = "OFFBOARD"
+                self.arm_message = False
         
         # 計算相對於地面的高度（NED: Z 向下為正，所以高度 = ground_z - current_z）
         if self.ground_level_z is not None:
@@ -341,9 +360,16 @@ class OffboardControl(Node):
                 elif(not(self.flightCheck)):
                     self.current_state = "IDLE"
                     self.get_logger().info("❌ TAKEOFF → IDLE（flightCheck失敗）")
+                elif self.arm_state != 2:  # 中途 disarm
+                    self.current_state = "IDLE"
+                    self.get_logger().info("❌ TAKEOFF → IDLE（無人機已 Disarm）")
                 elif(self.nav_state == VehicleStatus.NAVIGATION_STATE_AUTO_TAKEOFF):
+                    # PX4 已進入起飛模式，轉到 LOITER 等待高度達標
                     self.current_state = "LOITER"
                     self.get_logger().info("✅ TAKEOFF → LOITER（PX4進入起飛模式）")
+                elif self.myCnt > 100:  # 10 秒超時保護
+                    self.get_logger().warning(f"⚠️ TAKEOFF 超時 (nav_state={self.nav_state})，強制 → LOITER")
+                    self.current_state = "LOITER"
                 self.arm() #send arm command
                 self.take_off() #send takeoff command
 
@@ -356,17 +382,42 @@ class OffboardControl(Node):
                 elif(not(self.flightCheck)):
                     self.current_state = "IDLE"
                     self.get_logger().info("❌ LOITER → IDLE（flightCheck失敗）")
+                elif self.arm_state != 2:  # 中途 disarm
+                    self.current_state = "IDLE"
+                    self.get_logger().info("❌ LOITER → IDLE（無人機已 Disarm）")
+                elif self.current_altitude >= (self.takeoff_target_altitude - 0.5):
+                    # ✅ 優先使用高度判定（更可靠）：已達目標高度 2.0m（2.5m - 0.5m 容錯）
+                    self.current_state = "OFFBOARD"
+                    self.get_logger().info(f"✅ LOITER → OFFBOARD（高度達標: {self.current_altitude:.2f}m ≥ {self.takeoff_target_altitude - 0.5:.1f}m）")
+                    # 記錄安全範圍原點
+                    if self.current_position is not None:
+                        self.offboard_entry_position = {
+                            'x': self.current_position['x'],
+                            'y': self.current_position['y'],
+                            'z': self.current_position['z']
+                        }
+                        self.get_logger().info(
+                            f"🎯 安全範圍原點已設定: "
+                            f"X={self.offboard_entry_position['x']:.2f}m, "
+                            f"Y={self.offboard_entry_position['y']:.2f}m, "
+                            f"高度={self.current_altitude:.2f}m"
+                        )
                 elif(self.nav_state == VehicleStatus.NAVIGATION_STATE_AUTO_LOITER):
-                    # 到達 Loiter 狀態，切換到 Offboard
+                    # PX4 已進入 LOITER 狀態（備用判定）
                     self.current_state = "OFFBOARD"
                     self.get_logger().info(f"✅ LOITER → OFFBOARD（PX4進入LOITER，高度: {self.current_altitude:.2f}m）")
-                elif self.current_altitude >= (self.takeoff_target_altitude - 0.3):
-                    # 已達目標高度（容錯 0.3m），直接切換到 Offboard
+                elif(self.myCnt > 500):  # 50 秒超時（給足時間起飛）
+                    self.get_logger().warning(
+                        f"⚠️ LOITER 超時（高度: {self.current_altitude:.2f}m, nav_state: {self.nav_state}），"
+                        f"強制 → OFFBOARD（可能高度估測有誤）"
+                    )
                     self.current_state = "OFFBOARD"
-                    self.get_logger().info(f"✅ LOITER → OFFBOARD（已達目標高度 {self.current_altitude:.2f}m）")
-                elif(self.myCnt > 300):  # 30 秒超時（給足時間起飛）
-                    self.get_logger().warning(f"⚠️ LOITER 超時（高度: {self.current_altitude:.2f}m, nav_state: {self.nav_state}），強制 → OFFBOARD")
-                    self.current_state = "OFFBOARD"
+                else:
+                    # 每 5 秒打印一次起飛進度
+                    if self.myCnt % 50 == 0:
+                        self.get_logger().info(
+                            f"🚁 起飛中... 高度: {self.current_altitude:.2f}m / {self.takeoff_target_altitude}m"
+                        )
                 self.arm()
 
             case "OFFBOARD":
@@ -374,13 +425,19 @@ class OffboardControl(Node):
                 if self.arm_state != 2:  # ARMING_STATE_ARMED = 2
                     self.current_state = "IDLE"
                     self.arm_message = False
+                    self.offboardMode = False
                     self.get_logger().info("Offboard: 無人機已 Disarm，返回 IDLE")
                 elif self.failsafe:
                     self.current_state = "IDLE"
                     self.arm_message = False
+                    self.offboardMode = False
                     self.get_logger().warning("Offboard: Failsafe 觸發，返回 IDLE")
+                elif not self.offboardMode:
+                    # 首次進入 OFFBOARD 狀態，啟用 Offboard 模式
+                    self.state_offboard()
+                    self.get_logger().info("🎮 Offboard 模式已啟用，開始接收速度指令")
                 else:
-                    # 持續發送 Offboard 模式指令
+                    # 已在 Offboard 模式，持續發送模式切換指令（確保不被踢出）
                     self.state_offboard()
 
         # ✅ 修正：只在 IDLE 狀態且無人機未解鎖時重置 arm_message
@@ -549,17 +606,22 @@ class OffboardControl(Node):
     def cmdloop_callback(self):
         import time
         
-        # ✅ 關鍵修正：無條件發送 Setpoints（滿足 PX4 Offboard 切換前提條件）
-        # PX4 規定：切換到 Offboard 前必須已收到 > 2Hz 的控制指令
-        # 因此我們始終發送，不管當前是否在 Offboard 模式
+        # ✅✅✅ 關鍵修正：TAKEOFF/LOITER 期間完全不發送任何控制指令 ✅✅✅
+        # 讓 PX4 的 NAV_TAKEOFF 完全獨占控制，不被 velocity setpoint 干擾
+        if self.current_state in ["TAKEOFF", "LOITER"]:
+            # 起飛過程中：完全不發送 OffboardControlMode 和 TrajectorySetpoint
+            # PX4 會用內建的起飛邏輯推油門上升
+            # 只需發布可視化數據
+            self.publish_safety_visualization()
+            return  # ← 關鍵：直接跳過，不發送任何控制指令
         
         # ✅ 決定發送的速度值（根據狀態機狀態）
         if self.current_state == "PREARM":
-            # PREARM 狀態：發送懸停指令 (0,0,0)，讓 PX4 準備好
+            # PREARM 狀態：發送懸停指令 (0,0,0)，讓 PX4 準備好接收 Offboard
             vx = vy = vz = vyaw = 0.0
             
-        elif self.offboardMode:
-            # Offboard 模式：發送真實速度指令
+        elif self.offboardMode and self.current_state == "OFFBOARD":
+            # ✅ 只在完全進入 OFFBOARD 狀態後才發送真實速度指令
             # 超時檢查（5 秒沒收到指令 → 自動懸停）
             current_time = time.time()
             if self.last_cmd_time > 0 and (current_time - self.last_cmd_time) > self.cmd_timeout:
@@ -573,18 +635,19 @@ class OffboardControl(Node):
                 vz = self.velocity.z
                 vyaw = self.yaw
         else:
-            # 非 Offboard 模式：發送懸停指令 (0,0,0)
-            # 這確保 PX4 隨時準備好接受切換，不會因為沒收到指令而拒絕
+            # IDLE、ARMING 等其他狀態：發送懸停指令 (0,0,0)
+            # 這確保 PX4 隨時準備好接受切換
             vx = vy = vz = vyaw = 0.0
         
-        # ✅ 邊界檢查（在 Offboard 模式下且原點已設定）
+        # ✅ 邊界檢查（只在 OFFBOARD 狀態且原點已設定時檢查）
         if (self.offboardMode and 
+            self.current_state == "OFFBOARD" and
             self.offboard_entry_position is not None and 
             self.current_position is not None and 
             self.boundary_check_enabled):
             vx, vy, vz = self.check_safety_boundary(vx, vy, vz)
         
-        # ✅ 始終發送 OffboardControlMode（心跳包）
+        # ✅ 發送 OffboardControlMode（心跳包）
         offboard_msg = OffboardControlMode()
         offboard_msg.timestamp = int(Clock().now().nanoseconds / 1000)
         offboard_msg.position = False
@@ -592,7 +655,7 @@ class OffboardControl(Node):
         offboard_msg.acceleration = False
         self.publisher_offboard_mode.publish(offboard_msg)            
 
-        # ✅ 始終發送 TrajectorySetpoint
+        # ✅ 發送 TrajectorySetpoint
         # 直接使用 NED 座標（optimizer 已經發送 NED）
         trajectory_msg = TrajectorySetpoint()
         trajectory_msg.timestamp = int(Clock().now().nanoseconds / 1000)
@@ -688,28 +751,36 @@ class OffboardControl(Node):
         return (vx, vy, vz)
     
     def publish_safety_visualization(self):
-        """發布安全範圍數據給 RViz2 可視化"""
+        """✅ 發布安全範圍數據給 RViz2 可視化（NED → ENU 轉換）"""
         
         # 檢查前提條件
         if self.offboard_entry_position is None or self.current_position is None:
             return
         
         now = self.get_clock().now().to_msg()
-        frame_id = 'map'  # 或 'odom'，須與 RViz2 配置一致
+        frame_id = 'map'
+        
+        # ✅ NED → ENU 轉換函數
+        def ned_to_enu(ned_x, ned_y, ned_z):
+            """NED (North, East, Down) → ENU (East, North, Up)"""
+            enu_x = ned_y      # East = NED East
+            enu_y = ned_x      # North = NED North
+            enu_z = -ned_z     # Up = -NED Down
+            return enu_x, enu_y, enu_z
         
         # ========== 1. 發布原點位置（綠色球體）==========
         origin_pose = PoseStamped()
         origin_pose.header.stamp = now
         origin_pose.header.frame_id = frame_id
         
-        origin_pose.pose.position.x = self.offboard_entry_position['x']
-        origin_pose.pose.position.y = self.offboard_entry_position['y']
-        origin_pose.pose.position.z = self.offboard_entry_position['z']
-        
-        # 設置方向為單位四元數（無旋轉）
-        origin_pose.pose.orientation.x = 0.0
-        origin_pose.pose.orientation.y = 0.0
-        origin_pose.pose.orientation.z = 0.0
+        o_x, o_y, o_z = ned_to_enu(
+            self.offboard_entry_position['x'],
+            self.offboard_entry_position['y'],
+            self.offboard_entry_position['z']
+        )
+        origin_pose.pose.position.x = o_x
+        origin_pose.pose.position.y = o_y
+        origin_pose.pose.position.z = o_z
         origin_pose.pose.orientation.w = 1.0
         
         self.origin_pub.publish(origin_pose)
@@ -719,19 +790,19 @@ class OffboardControl(Node):
         current_pose.header.stamp = now
         current_pose.header.frame_id = frame_id
         
-        current_pose.pose.position.x = self.current_position['x']
-        current_pose.pose.position.y = self.current_position['y']
-        current_pose.pose.position.z = self.current_position['z']
-        
-        current_pose.pose.orientation.x = 0.0
-        current_pose.pose.orientation.y = 0.0
-        current_pose.pose.orientation.z = 0.0
+        c_x, c_y, c_z = ned_to_enu(
+            self.current_position['x'],
+            self.current_position['y'],
+            self.current_position['z']
+        )
+        current_pose.pose.position.x = c_x
+        current_pose.pose.position.y = c_y
+        current_pose.pose.position.z = c_z
         current_pose.pose.orientation.w = 1.0
         
         self.position_pub.publish(current_pose)
         
-        # ========== 3. 發布軌跡（參考 visualizer.py）==========
-        # 參考 visualizer.py 的方式發布 Path 訊息
+        # ========== 3. 發布軌跡 ==========
         self.vehicle_path_msg.header = current_pose.header
         self.vehicle_path_msg.poses.append(current_pose)
         self.path_pub.publish(self.vehicle_path_msg)
@@ -743,7 +814,7 @@ class OffboardControl(Node):
             'z': self.current_position['z']
         })
         
-        # ========== 4. 發布安全邊界框（透明藍色立方體）==========
+        # ========== 4. 發布安全邊界框（透明藍色立方體，ENU 座標）==========
         marker_array = MarkerArray()
         
         boundary_marker = Marker()
@@ -754,34 +825,32 @@ class OffboardControl(Node):
         boundary_marker.type = Marker.CUBE
         boundary_marker.action = Marker.ADD
         
-        # 位置：邊界中心（原點 + 向下 1.5m，NED 座標系）
-        boundary_marker.pose.position.x = self.offboard_entry_position['x']
-        boundary_marker.pose.position.y = self.offboard_entry_position['y']
-        boundary_marker.pose.position.z = self.offboard_entry_position['z'] - 1.5  # 中心點
-        
-        boundary_marker.pose.orientation.x = 0.0
-        boundary_marker.pose.orientation.y = 0.0
-        boundary_marker.pose.orientation.z = 0.0
+        b_x, b_y, b_z = ned_to_enu(
+            self.offboard_entry_position['x'],
+            self.offboard_entry_position['y'],
+            self.offboard_entry_position['z'] - 1.5
+        )
+        boundary_marker.pose.position.x = b_x
+        boundary_marker.pose.position.y = b_y
+        boundary_marker.pose.position.z = b_z
         boundary_marker.pose.orientation.w = 1.0
         
-        # 尺寸：3×3×3 米
-        boundary_marker.scale.x = 3.0
-        boundary_marker.scale.y = 3.0
+        # ✅ 尺寸：2.4×2.4×3.0 米（對應 ±1.2m）
+        boundary_marker.scale.x = 2.4
+        boundary_marker.scale.y = 2.4
         boundary_marker.scale.z = 3.0
         
-        # 顏色：藍色，透明度 30%
         boundary_marker.color = ColorRGBA()
         boundary_marker.color.r = 0.0
         boundary_marker.color.g = 0.0
         boundary_marker.color.b = 1.0
         boundary_marker.color.a = 0.3
         
-        # 生命週期：1 秒後自動消失（防止重複堆積）
         boundary_marker.lifetime = Duration(seconds=1).to_msg()
         
         marker_array.markers.append(boundary_marker)
         
-        # ========== 4. 發布軌跡線條（可選）==========
+        # ========== 5. 發布軌跡線條 ==========
         if len(self.position_history) > 1:
             trajectory_marker = Marker()
             trajectory_marker.header.stamp = now
@@ -791,15 +860,14 @@ class OffboardControl(Node):
             trajectory_marker.type = Marker.LINE_STRIP
             trajectory_marker.action = Marker.ADD
             
-            # 填充軌跡點
             for pos in self.position_history:
+                p_x, p_y, p_z = ned_to_enu(pos['x'], pos['y'], pos['z'])
                 point = Point()
-                point.x = pos['x']
-                point.y = pos['y']
-                point.z = pos['z']
+                point.x = p_x
+                point.y = p_y
+                point.z = p_z
                 trajectory_marker.points.append(point)
             
-            # 線條樣式：白色，線寬 1cm
             trajectory_marker.scale.x = 0.01
             trajectory_marker.color = ColorRGBA()
             trajectory_marker.color.r = 1.0

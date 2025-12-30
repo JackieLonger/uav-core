@@ -184,6 +184,8 @@ class DroneState:
     is_moving: bool = False                    # 是否正在移動中
     scan_start_time: float = 0.0               # 掃描開始時間（用於超時保護）
     current_cycle_id: int = 0                  # 當前掃描輪次 ID
+    last_distance: float = float('inf')        # ✅ 上次距離（穩定判定）
+    distance_stable_count: int = 0             # ✅ 距離穩定計數
     
     def cycle_complete(self) -> bool:
         """檢查當前輪次五點是否都已掃描"""
@@ -520,14 +522,14 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
     ALTITUDE_TARGET = 2.0        # 固定高度 2.0m（XY平面掃描）
     ALTITUDE_THRESHOLD = 1.5     # 舊參數保留相容
     PUBLISH_RATE = 100.0         # Hz (100Hz for PX4 Offboard)
-    MOVE_DURATION = 4.0          # 每次移動持續時間（秒）
+    MOVE_DURATION = 8.0          # ✅ 每次移動持續時間（從 4s 增加到 8s）
     SCAN_WAIT_TIMEOUT = 120.0    # 掃描等待超時（秒）
-    ARRIVAL_THRESHOLD = 0.20     # 到達判定距離（米）
+    ARRIVAL_THRESHOLD = 0.40     # ✅ 到達判定距離（從 0.20m 放寬到 0.40m）
     
     # 邊界（相對於 origin_xy）
-    SCAN_DISTANCE = 1.2          # 掃描點與原點的距離（米）
-    BOUNDS_X = (-1.5, 1.5)       # X 軸邊界（±1.5m）
-    BOUNDS_Y = (-1.5, 1.5)       # Y 軸邊界（±1.5m）
+    SCAN_DISTANCE = 0.8          # ✅ 掃描點距離（從 1.2m 縮小到 0.8m）
+    BOUNDS_X = (-1.2, 1.2)       # ✅ X 軸邊界（從 ±1.5m 縮小到 ±1.2m）
+    BOUNDS_Y = (-1.2, 1.2)       # ✅ Y 軸邊界
     BOUNDS_Z = (0.0, 3.0)        # Z 軸邊界（只能上升 0~3m）
     
     def __init__(self):
@@ -1028,16 +1030,43 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
             dist_y = target_y - current_y
             dist = math.sqrt(dist_x**2 + dist_y**2)
             
-            # 如果已經接近目標，進入下一階段
-            if dist < 0.1:
-                state.current_velocity = (0.0, 0.0, 0.0)
-                state.is_moving = False
-                state.scan_phase = next_phase
-                state.movement_count += 1
-                self.get_logger().info(
-                    f"Drone {drone_id}: ✅ 到達 {direction} 掃描點，開始掃描"
-                )
-                return
+            # ✅ 改進的到達判定：距離穩定標準
+            if dist < self.ARRIVAL_THRESHOLD:
+                if abs(dist - state.last_distance) < 0.05:
+                    state.distance_stable_count += 1
+                else:
+                    state.distance_stable_count = 0
+                
+                if state.distance_stable_count >= 3:
+                    state.current_velocity = (0.0, 0.0, 0.0)
+                    state.is_moving = False
+                    state.scan_phase = next_phase
+                    state.movement_count += 1
+                    state.distance_stable_count = 0
+                    self.get_logger().info(
+                        f"Drone {drone_id}: ✅ 到達 {direction} 掃描點（距離 {dist:.2f}m，穩定）"
+                    )
+                    return
+            elif dist < self.ARRIVAL_THRESHOLD + 0.2:
+                if abs(dist - state.last_distance) < 0.05:
+                    state.distance_stable_count += 1
+                else:
+                    state.distance_stable_count = 0
+                
+                if state.distance_stable_count >= 10:
+                    state.current_velocity = (0.0, 0.0, 0.0)
+                    state.is_moving = False
+                    state.scan_phase = next_phase
+                    state.movement_count += 1
+                    state.distance_stable_count = 0
+                    self.get_logger().warning(
+                        f"Drone {drone_id}: ⚠️ {direction} 距離停滯（{dist:.2f}m），視為到達"
+                    )
+                    return
+            else:
+                state.distance_stable_count = 0
+            
+            state.last_distance = dist
             
             # 開始移動或持續移動
             if not state.is_moving:
@@ -1048,13 +1077,15 @@ class MultiDroneSignalOptimizer(Node, KeyboardCommander):
                 )
             
             # 檢查移動超時（防止卡住）
-            if time.time() - state.move_start_time > self.MOVE_DURATION * 3:
+            elapsed = time.time() - state.move_start_time
+            if elapsed > self.MOVE_DURATION * 3:
                 state.current_velocity = (0.0, 0.0, 0.0)
                 state.is_moving = False
                 state.scan_phase = next_phase
                 state.movement_count += 1
-                self.get_logger().warn(
-                    f"Drone {drone_id}: ⚠️ 移動超時，強制進入 {direction} 掃描"
+                state.distance_stable_count = 0
+                self.get_logger().warning(
+                    f"Drone {drone_id}: ⚠️ 移動超時（{direction}，距離 {dist:.2f}m，耗時 {elapsed:.1f}s），強制進入 {direction} 掃描"
                 )
                 return
             

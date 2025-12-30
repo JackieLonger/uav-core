@@ -40,6 +40,9 @@ setup(
                 'fast_scan = px4_offboard.fast_scan_node:main',
                 'multi_drone_signal_optimizer = px4_offboard.multi_drone_signal_optimizer:main',
                 'multi_drone_visualizer = px4_offboard.multi_drone_visualizer:main',
+                # ===== 位置控制模式 (Position Control) =====
+                'position_control = px4_offboard.position_control:main',
+                'multi_drone_position_optimizer = px4_offboard.multi_drone_position_optimizer:main',
         ],
     },
 )
