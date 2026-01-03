@@ -150,11 +150,11 @@ class PositionControl(Node):
         self.rc_offboard_entry = False
         self.takeoff_altitude_reached = False
         
-        # ✅ 安全範圍保護（位置模式：直接裁剪目標）
+        # ✅ 安全範圍保護（位置模式：直接裁剪目標）- 與 optimizer 統一
         self.offboard_entry_position = None
-        self.safety_bounds_x = (-1.2, 1.2)  # ✅ 縮小到 ±1.2m（與掃描點保持緩衝）
-        self.safety_bounds_y = (-1.2, 1.2)
-        self.safety_bounds_z = (0.0, 3.0)
+        self.safety_bounds_x = (-1.6, 1.6)  # ✅ 與速度版本統一 ±1.6m
+        self.safety_bounds_y = (-1.6, 1.6)  # ✅ 與速度版本統一 ±1.6m
+        self.safety_bounds_z = (0.0, 3.5)   # ✅ 與速度版本統一 3.5m
         self.boundary_check_enabled = True
         
         # ✅ 空中重啟檢測標記
@@ -692,9 +692,9 @@ class PositionControl(Node):
         boundary_marker.pose.position.y = b_y
         boundary_marker.pose.position.z = b_z
         boundary_marker.pose.orientation.w = 1.0
-        boundary_marker.scale.x = 2.4  # ✅ 對應 ±1.2m
-        boundary_marker.scale.y = 2.4
-        boundary_marker.scale.z = 3.0
+        boundary_marker.scale.x = 3.2  # ✅ 對應 ±1.6m (2 × 1.6m)
+        boundary_marker.scale.y = 3.2  # ✅ 對應 ±1.6m
+        boundary_marker.scale.z = 3.5  # ✅ 對應 0~3.5m 高度
         boundary_marker.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.3)
         boundary_marker.lifetime = Duration(seconds=1).to_msg()
         marker_array.markers.append(boundary_marker)

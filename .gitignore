@@ -12,6 +12,9 @@ config/local.yaml
 .idea/
 .DS_Store
 
+# 測試用資料夾
+test/
+
 # Python 编译文件
 *.pyc
 *.pyo
@@ -36,3 +39,13 @@ install_manifest.txt
 src/px4_msgs/
 src/px4_ros_com/
 src/v1.14
+
+# 測試用.sh
+run_full_test.sh
+test_complete_mission.sh
+test_full_mission.sh
+test_scan_logic.sh
+test_full_mission_auto.sh
+test_full_mission_auto.py
+test_scan_logic.py
+

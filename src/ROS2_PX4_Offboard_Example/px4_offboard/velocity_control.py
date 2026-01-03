@@ -178,12 +178,12 @@ class OffboardControl(Node):
         self.offboard_lost_time = 0.0  # 偵測到失去 Offboard 的時間
         self.RC_TAKEOVER_THRESHOLD = 0.3  # 需要持續 0.3 秒才認為是 RC 接管
         
-        # ✅ 安全範圍保護
+        # ✅ 安全範圍保護（五點掃描：原點 + 前後左右各 1.5m）
         self.offboard_entry_position = None  # 進入 Offboard 時的 3D 位置
         self.current_position = None  # 當前無人機位置
-        self.safety_bounds_x = (-1.2, 1.2)  # ✅ 縮小到 ±1.2m（與掃描點保持緩衝）
-        self.safety_bounds_y = (-1.2, 1.2)
-        self.safety_bounds_z = (0.0, 3.0)
+        self.safety_bounds_x = (-1.6, 1.6)  # ✅ 放寬到 ±1.6m（配合 1.5m 掃描半徑）
+        self.safety_bounds_y = (-1.6, 1.6)  # ✅ 放寬到 ±1.6m
+        self.safety_bounds_z = (0.0, 3.5)   # ✅ 放寬到 3.5m（配合 2.5m 高度）
         self.boundary_check_enabled = True
         
         # ✅ 空中重啟檢測標記
@@ -835,10 +835,10 @@ class OffboardControl(Node):
         boundary_marker.pose.position.z = b_z
         boundary_marker.pose.orientation.w = 1.0
         
-        # ✅ 尺寸：2.4×2.4×3.0 米（對應 ±1.2m）
-        boundary_marker.scale.x = 2.4
-        boundary_marker.scale.y = 2.4
-        boundary_marker.scale.z = 3.0
+        # ✅ 尺寸：3.2×3.2×3.5 米（對應 ±1.6m × ±1.6m × 0~3.5m）
+        boundary_marker.scale.x = 3.2
+        boundary_marker.scale.y = 3.2
+        boundary_marker.scale.z = 3.5
         
         boundary_marker.color = ColorRGBA()
         boundary_marker.color.r = 0.0

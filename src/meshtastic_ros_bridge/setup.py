@@ -12,9 +12,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=[
-        'setuptools',
-        'meshtastic', # pip install meshtastic
-        'pypubsub'    # pip install pypubsub
+        'meshtastic==2.7.3',  # pinned for compatibility
+        'pypubsub'            # pip install pypubsub
     ],
     zip_safe=True,
     maintainer='Gemini',

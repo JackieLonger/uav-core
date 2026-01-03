@@ -32,15 +32,14 @@ echo "4) 僅啟動 RViz2"
 echo ""
 read -p "請輸入選項 [1-4]: " choice
 
-# 定義 RViz 啟動函數 (避免重複代碼)
+# 定义 RViz 启动函数 (避免重复代码)
 launch_rviz_bg() {
-    echo "正在背景啟動 RViz2..."
     source install/setup.bash
-    # 清除可能導致衝突的環境變數 (參考原腳本)
+    # 清除可能导致衝突的環境變數 (參考原腳本)
     unset GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR LOCPATH
     # 啟動 RViz 並將輸出丟入黑洞，避免干擾終端機
     /opt/ros/humble/bin/rviz2 -d src/ROS2_PX4_Offboard_Example/resource/multi_drone.rviz > /dev/null 2>&1 &
-    # 回傳 PID
+    # ✅ 立即获取 PID，避免包含其他信息
     echo $!
 }
 
@@ -98,10 +97,11 @@ case $choice in
         DRONE_IDS="${DRONE_IDS}]"
         
         # 1. 在背景啟動 RViz
+        echo "正在背景啟動 RViz2..."
         RVIZ_PID=$(launch_rviz_bg)
         
         # 設定捕捉訊號：當腳本結束或被 Ctrl+C 時，自動關閉 RViz
-        trap "echo '正在關閉 RViz...'; kill $RVIZ_PID" EXIT
+        trap "echo '正在關閉 RViz...'; kill $RVIZ_PID 2>/dev/null" EXIT
         
         echo "RViz 已在背景執行 (PID: $RVIZ_PID)"
         echo "啟動優化器 (請在此直接輸入指令，如 1, 2, Q)..."

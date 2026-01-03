@@ -34,13 +34,19 @@ Multi-Drone Position Optimizer - 多无人机协同信号优化器（位置控�
 """
 
 import sys
+import os
+import csv
+from datetime import datetime
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String, Bool
+from rclpy.duration import Duration
+from geometry_msgs.msg import PoseStamped, Point
+from std_msgs.msg import String, Bool, ColorRGBA
 from px4_msgs.msg import VehicleLocalPosition
+from visualization_msgs.msg import Marker, MarkerArray
+from nav_msgs.msg import Path
 import threading
 import json
 import time
@@ -112,6 +118,7 @@ class ScanPhase:
     FRONT_SCAN = "FRONT_SCAN"
     MOVE_BACK = "MOVE_BACK"
     BACK_SCAN = "BACK_SCAN"
+    RETURN_TO_ORIGIN = "RETURN_TO_ORIGIN"  # ✅ 返回原點（中繼點）
     MOVE_LEFT = "MOVE_LEFT"
     LEFT_SCAN = "LEFT_SCAN"
     MOVE_RIGHT = "MOVE_RIGHT"
@@ -161,6 +168,7 @@ class DroneState:
     move_start_time: float = 0.0
     last_distance: float = float('inf')      # ✅ 上次距離（穩定判定）
     distance_stable_count: int = 0           # ✅ 距離穩定計數
+    next_scan_target: Optional[str] = None   # ✅ 返回原點後的下一個目標（'left' 或 'right'）
     
     def both_trackers_ready(self) -> bool:
         with self.lock:
@@ -326,8 +334,11 @@ class KeyboardCommander:
         self.get_logger().info("键盘监听线程退出")
     
     def _handle_key(self, key: str):
-        if not self.selected_drones:
-            print("⚠️  请先选择无人机（按 1/2/3/A）")
+        # ✅ 修正：允許全局快捷鍵（1/2/3/A/Q/?）在未選擇無人機時使用
+        global_keys = ['1', '2', '3', 'a', 'A', 'q', 'Q', '?']
+        
+        if not self.selected_drones and key not in global_keys:
+            print("⚠️  請先選擇無人機（按 1/2/3/A）")
             return
         
         if key == ' ':
@@ -407,6 +418,16 @@ class KeyboardCommander:
                 msg = String()
                 msg.data = command
                 self.command_publishers[drone_id].publish(msg)
+            
+            # ✅ 新增：發送掃描控制指令到 scan_control 話題
+            if command == 'START_SCAN' and drone_id in self.scan_control_publishers:
+                scan_msg = Bool()
+                scan_msg.data = True
+                self.scan_control_publishers[drone_id].publish(scan_msg)
+            elif command == 'STOP_SCAN' and drone_id in self.scan_control_publishers:
+                scan_msg = Bool()
+                scan_msg.data = False
+                self.scan_control_publishers[drone_id].publish(scan_msg)
     
     def _display_status(self):
         status_lines = []
@@ -444,16 +465,18 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
     # 常量配置
     MAX_MOVEMENTS = 10
     ALTITUDE_TARGET = 2.0
-    PUBLISH_RATE = 10.0          # ✅ 降低到 10Hz（位置模式不需要高頻）
-    ARRIVAL_THRESHOLD = 0.40     # ✅ 放寬到 0.40m（考慮 GPS 漂移）
+    PUBLISH_RATE = 10.0          # ✅ 位置控制 10Hz（TrajectorySetpoint 建議頻率）
+    ARRIVAL_THRESHOLD = 0.35     # ✅ 考慮 GPS 漂移，適度放寬（速度版本 0.30m）
     SCAN_WAIT_TIMEOUT = 120.0    # 掃描等待超時（秒）
-    MOVE_TIMEOUT = 20.0          # ✅ 移動超時（秒）
+    STABILIZE_WAIT = 3.0         # ✅ 穩定等待 3 秒（與速度版本統一）
+    MOVE_TIMEOUT = 24.0          # ✅ 移動超時 24 秒（與速度版本 MOVE_DURATION*3 對齊）
+    SCAN_VELOCITY = 0.15         # 掃描移動速度（用於日誌計算）
     
-    # 邊界
-    SCAN_DISTANCE = 0.8          # ✅ 縮小到 0.8m（與邊界 1.2 保持 0.4m 緩衝）
-    BOUNDS_X = (-1.2, 1.2)       # ✅ 縮小到 ±1.2m
-    BOUNDS_Y = (-1.2, 1.2)
-    BOUNDS_Z = (0.0, 3.0)
+    # 邊界（與速度版本統一）
+    SCAN_DISTANCE = 1.5          # ✅ 掃描距離 1.5m（與速度版本統一）
+    BOUNDS_X = (-1.6, 1.6)       # ✅ X 軸邊界 ±1.6m（與速度版本統一）
+    BOUNDS_Y = (-1.6, 1.6)       # ✅ Y 軸邊界 ±1.6m
+    BOUNDS_Z = (0.0, 3.5)        # ✅ Z 軸邊界 3.5m（與速度版本統一）
     
     def __init__(self):
         Node.__init__(self, 'multi_drone_position_optimizer')
@@ -517,6 +540,61 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                 10
             )
         
+        # ✅ 新增：掃描控制發布器（Bool）
+        self.scan_control_publishers = {}
+        for drone_id in drone_ids:
+            topic = f'/drone_{drone_id}/scan_control'
+            self.scan_control_publishers[drone_id] = self.create_publisher(
+                Bool,
+                topic,
+                10
+            )
+            self.get_logger().info(f"掃描控制發布到 {topic}")
+        
+        # ✅ 新增：RViz2 可視化發布器
+        self.origin_pubs = {}
+        self.position_pubs = {}
+        self.target_pubs = {}
+        self.path_pubs = {}
+        self.boundary_pubs = {}
+        self.position_histories = {}  # 為每個無人機保存位置歷史
+        self.path_messages = {}       # 為每個無人機保存軌跡信息
+        
+        for drone_id in drone_ids:
+            self.origin_pubs[drone_id] = self.create_publisher(
+                PoseStamped,
+                f'/drone_{drone_id}/safety_origin',
+                10
+            )
+            self.position_pubs[drone_id] = self.create_publisher(
+                PoseStamped,
+                f'/drone_{drone_id}/current_position',
+                10
+            )
+            self.target_pubs[drone_id] = self.create_publisher(
+                PoseStamped,
+                f'/drone_{drone_id}/target_position',
+                10
+            )
+            self.path_pubs[drone_id] = self.create_publisher(
+                Path,
+                f'/drone_{drone_id}/vehicle_path',
+                10
+            )
+            self.boundary_pubs[drone_id] = self.create_publisher(
+                MarkerArray,
+                f'/drone_{drone_id}/safety_boundary',
+                10
+            )
+            self.position_histories[drone_id] = deque(maxlen=50)
+            self.path_messages[drone_id] = Path()
+            self.path_messages[drone_id].header.frame_id = 'map'
+        
+        self.get_logger().info("RViz2 可視化發布器已初始化")
+        
+        # ✅ 新增：訊號歷史記錄器（每次飛行一個 CSV）
+        self._init_signal_logger(drone_ids)
+        
         # 决策线程
         self.decision_threads = {}
         self.running = True
@@ -547,11 +625,126 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
         
         self.get_logger().info(f"🎯 位置控制優化器啟動（{num_drones} 架无人机）")
     
+    def _init_signal_logger(self, drone_ids: list):
+        """初始化訊號歷史記錄器（每架無人機一個 CSV 檔案）"""
+        # 建立 signal_logs 目錄
+        self.log_dir = os.path.expanduser("~/uav-core/signal_logs")
+        os.makedirs(self.log_dir, exist_ok=True)
+        
+        # 產生飛行時間戳記（所有無人機共用）
+        self.flight_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # 為每架無人機建立 CSV 檔案
+        self.signal_log_files = {}
+        self.signal_log_writers = {}
+        self.signal_log_lock = threading.Lock()
+        
+        # CSV 標頭（包含所有需要記錄的欄位）
+        self.csv_headers = [
+            "timestamp",           # 時間戳記
+            "drone_id",            # 無人機 ID
+            "scan_phase",          # 掃描階段
+            "target_id",           # Tracker ID
+            "status",              # 掃描狀態
+            "forward_rssi",        # 前向 RSSI
+            "forward_snr",         # 前向 SNR
+            "return_rssi",         # 返向 RSSI
+            "return_snr",          # 返向 SNR
+            "quality_score",       # 綜合品質分數
+            "pos_x",               # 位置 X (NED)
+            "pos_y",               # 位置 Y (NED)
+            "pos_z",               # 位置 Z (NED)
+            "origin_x",            # 原點 X
+            "origin_y",            # 原點 Y
+        ]
+        
+        for drone_id in drone_ids:
+            filename = f"flight_{self.flight_timestamp}_drone{drone_id}.csv"
+            filepath = os.path.join(self.log_dir, filename)
+            
+            try:
+                file = open(filepath, 'w', newline='', encoding='utf-8')
+                writer = csv.DictWriter(file, fieldnames=self.csv_headers)
+                writer.writeheader()
+                
+                self.signal_log_files[drone_id] = file
+                self.signal_log_writers[drone_id] = writer
+                
+                self.get_logger().info(f"📊 Drone {drone_id} 訊號記錄: {filepath}")
+            except Exception as e:
+                self.get_logger().error(f"無法建立訊號記錄檔: {e}")
+        
+        self.get_logger().info(f"✅ 訊號歷史記錄器初始化完成，目錄: {self.log_dir}")
+    
+    def _log_signal_data(self, drone_id: int, data: dict):
+        """記錄訊號數據到 CSV（線程安全）"""
+        if drone_id not in self.signal_log_writers:
+            return
+        
+        state = self.drone_states.get(drone_id)
+        if state is None:
+            return
+        
+        with self.signal_log_lock:
+            try:
+                # 計算品質分數
+                tracker_data = None
+                target_id = data.get('target_id', 'unknown')
+                if target_id in state.tracker_data_map:
+                    tracker_data = state.tracker_data_map[target_id]
+                
+                quality_score = tracker_data.quality_score if tracker_data else 0.0
+                
+                # 取得原點座標
+                origin_x, origin_y = (0.0, 0.0)
+                if state.origin_xy is not None:
+                    origin_x, origin_y = state.origin_xy
+                
+                row = {
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                    "drone_id": drone_id,
+                    "scan_phase": state.scan_phase,
+                    "target_id": target_id,
+                    "status": data.get('status', 'Unknown'),
+                    "forward_rssi": data.get('forward_rssi', ''),
+                    "forward_snr": data.get('forward_snr', ''),
+                    "return_rssi": data.get('return_rssi', ''),
+                    "return_snr": data.get('return_snr', ''),
+                    "quality_score": f"{quality_score:.4f}",
+                    "pos_x": f"{state.current_position.x:.3f}",
+                    "pos_y": f"{state.current_position.y:.3f}",
+                    "pos_z": f"{state.current_position.z:.3f}",
+                    "origin_x": f"{origin_x:.3f}",
+                    "origin_y": f"{origin_y:.3f}",
+                }
+                
+                self.signal_log_writers[drone_id].writerow(row)
+                self.signal_log_files[drone_id].flush()  # 即時寫入磁碟
+                
+            except Exception as e:
+                self.get_logger().error(f"訊號記錄失敗: {e}")
+    
+    def _close_signal_loggers(self):
+        """關閉所有訊號記錄檔案"""
+        with self.signal_log_lock:
+            for drone_id, file in self.signal_log_files.items():
+                try:
+                    file.close()
+                    self.get_logger().info(f"📊 Drone {drone_id} 訊號記錄已關閉")
+                except Exception as e:
+                    self.get_logger().error(f"關閉訊號記錄檔失敗: {e}")
+            self.signal_log_files.clear()
+            self.signal_log_writers.clear()
+
+    
     def link_quality_callback(self, msg: String, drone_id: int):
         try:
             data = json.loads(msg.data)
             state = self.drone_states[drone_id]
             state.update_tracker_data(data)
+            
+            # ✅ 記錄訊號數據到 CSV（每次收到都記錄）
+            self._log_signal_data(drone_id, data)
             
             target_id = data.get('target_id', 'unknown')
             self.get_logger().debug(
@@ -580,13 +773,16 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
         pose.pose.position.y = y
         pose.pose.position.z = z
         
-        # 保持當前航向（四元數設為 0）
+        # ✅ 修正：四元數改為單位四元數 (0,0,0,1)，表示保持當前航向（而非無效的全零）
         pose.pose.orientation.x = 0.0
         pose.pose.orientation.y = 0.0
         pose.pose.orientation.z = 0.0
-        pose.pose.orientation.w = 0.0  # 全零 = 保持當前航向
+        pose.pose.orientation.w = 1.0  # ✅ 單位四元數
         
         self.position_publishers[drone_id].publish(pose)
+        
+        # ✅ 新增：發布 RViz2 可視化
+        self._publish_rviz_visualization(drone_id, x, y, z)
     
     def decision_loop(self, drone_id: int):
         """決策循環（位置控制版本）"""
@@ -638,7 +834,11 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                 
                 # ========== BACK_SCAN ==========
                 elif phase == ScanPhase.BACK_SCAN:
-                    self._wait_and_scan(drone_id, 'back', ScanPhase.MOVE_LEFT)
+                    self._wait_and_scan(drone_id, 'back', ScanPhase.RETURN_TO_ORIGIN, next_target='left')
+                
+                # ========== RETURN_TO_ORIGIN ==========
+                elif phase == ScanPhase.RETURN_TO_ORIGIN:
+                    self._move_to_origin(drone_id)
                 
                 # ========== MOVE_LEFT ==========
                 elif phase == ScanPhase.MOVE_LEFT:
@@ -646,7 +846,7 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                 
                 # ========== LEFT_SCAN ==========
                 elif phase == ScanPhase.LEFT_SCAN:
-                    self._wait_and_scan(drone_id, 'left', ScanPhase.MOVE_RIGHT)
+                    self._wait_and_scan(drone_id, 'left', ScanPhase.RETURN_TO_ORIGIN, next_target='right')
                 
                 # ========== MOVE_RIGHT ==========
                 elif phase == ScanPhase.MOVE_RIGHT:
@@ -700,6 +900,86 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
             'origin': (0.0, 0.0)
         }
         return offsets.get(direction, (0.0, 0.0))
+    
+    def _move_to_origin(self, drone_id: int):
+        """
+        返回原點（位置控制版本）
+        
+        邏輯：
+        - 根據 next_scan_target 判斷返回後的下一個目標
+        - 直接設定目標位置為原點
+        - 到達原點後進入對應的 MOVE_* 階段
+        """
+        state = self.drone_states[drone_id]
+        
+        with state.lock:
+            if state.origin_xy is None:
+                state.scan_phase = ScanPhase.INIT
+                return
+            
+            origin_x, origin_y = state.origin_xy
+            origin_z = state.origin_z
+            current_x = state.current_position.x
+            current_y = state.current_position.y
+            
+            # 設定目標位置為原點
+            state.target_position = (origin_x, origin_y, origin_z)
+            
+            # 計算到原點的距離
+            dist = math.sqrt((origin_x - current_x)**2 + (origin_y - current_y)**2)
+            
+            # ✅ 到達原點判定（GPS 考慮 0.35m 容差）
+            if dist < self.ARRIVAL_THRESHOLD:
+                if abs(dist - state.last_distance) < 0.05:
+                    state.distance_stable_count += 1
+                else:
+                    state.distance_stable_count = 0
+                
+                if state.distance_stable_count >= 3:
+                    # 根據 next_scan_target 決定下一階段
+                    if state.next_scan_target == 'left':
+                        state.scan_phase = ScanPhase.MOVE_LEFT
+                        next_desc = "left"
+                    elif state.next_scan_target == 'right':
+                        state.scan_phase = ScanPhase.MOVE_RIGHT
+                        next_desc = "right"
+                    else:
+                        # 異常情況：已完成所有掃描
+                        state.scan_phase = ScanPhase.CHOOSE_BEST
+                        next_desc = "CHOOSE_BEST"
+                    
+                    state.next_scan_target = None
+                    state.is_moving = False
+                    state.distance_stable_count = 0
+                    state.target_position = None
+                    self.get_logger().info(
+                        f"Drone {drone_id}: ✅ 已返回原點，準備移動到 {next_desc}"
+                    )
+                    return
+            else:
+                state.distance_stable_count = 0
+            
+            state.last_distance = dist
+            
+            # 開始或繼續移動到原點
+            if not state.is_moving:
+                state.move_start_time = time.time()
+                state.is_moving = True
+                self.get_logger().info(
+                    f"Drone {drone_id}: 🔄 返回原點 (距離: {dist:.2f}m)"
+                )
+            
+            # 超時檢查
+            elapsed = time.time() - state.move_start_time
+            if elapsed > self.MOVE_TIMEOUT:
+                self.get_logger().warning(
+                    f"Drone {drone_id}: ⚠️ 返回原點超時（{elapsed:.1f}s），強制進入下一階段"
+                )
+                state.scan_phase = ScanPhase.CHOOSE_BEST
+                state.target_position = None
+                return
+        
+        time.sleep(0.2)
     
     def _move_to_scan_point(self, drone_id: int, direction: str, next_phase: str):
         """✅ 位置控制：直接設定目標位置（改進版：穩定判定）"""
@@ -785,7 +1065,15 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
         
         time.sleep(0.2)
     
-    def _wait_and_scan(self, drone_id: int, point_name: str, next_phase: str):
+    def _wait_and_scan(self, drone_id: int, point_name: str, next_phase: str, next_target: Optional[str] = None):
+        """✅ 改進版：包含穩定等待邏輯
+        
+        Args:
+            drone_id: 無人機 ID
+            point_name: 掃描點名稱
+            next_phase: 掃描完成後的下一階段
+            next_target: ✅ 如果 next_phase 是 RETURN_TO_ORIGIN，此參數指定返回後的目標
+        """
         state = self.drone_states[drone_id]
         
         with state.lock:
@@ -799,25 +1087,46 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                     f"Drone {drone_id}: ⏳ {point_name} 掃描中..."
                 )
         
+        elapsed = time.time() - state.scan_start_time
+        
+        # ✅ 新增：穩定等待邏輯（先等待 STABILIZE_WAIT 秒，再等待 tracker ready）
+        if elapsed < self.STABILIZE_WAIT:
+            # 穩定等待中，重置 tracker flags 以清除舊數據
+            state.reset_tracker_flags()
+            time.sleep(0.1)
+            return
+        
         if state.both_trackers_ready():
             quality = state.calculate_current_quality()
             state.scan_scores[point_name] = quality
             state.reset_tracker_flags()
             state.scan_start_time = 0.0
             state.scan_phase = next_phase
-            self.get_logger().info(
-                f"Drone {drone_id}: ✅ {point_name} 掃描完成，品質={quality:.3f}"
-            )
-        elif time.time() - state.scan_start_time > self.SCAN_WAIT_TIMEOUT:
+            
+            # ✅ 如果下一階段是返回原點，設定 next_scan_target
+            if next_phase == ScanPhase.RETURN_TO_ORIGIN and next_target:
+                state.next_scan_target = next_target
+                self.get_logger().info(
+                    f"Drone {drone_id}: ✅ {point_name} 掃描完成，品質={quality:.3f}，準備返回原點"
+                )
+            else:
+                self.get_logger().info(
+                    f"Drone {drone_id}: ✅ {point_name} 掃描完成，品質={quality:.3f}"
+                )
+        elif elapsed > self.SCAN_WAIT_TIMEOUT:
             self.get_logger().warning(
-                f"Drone {drone_id}: ⚠️ {point_name} 掃描超時"
+                f"Drone {drone_id}: ⚠️ {point_name} 掃描超時（{elapsed:.1f}s）"
             )
             state.scan_scores[point_name] = 0.0
             state.reset_tracker_flags()
             state.scan_start_time = 0.0
             state.scan_phase = next_phase
+            
+            # ✅ 超時時也要設定 next_scan_target
+            if next_phase == ScanPhase.RETURN_TO_ORIGIN and next_target:
+                state.next_scan_target = next_target
         else:
-            time.sleep(0.5)
+            time.sleep(0.1)
     
     def _select_best_point(self, drone_id: int):
         state = self.drone_states[drone_id]
@@ -892,8 +1201,8 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
         time.sleep(0.2)
     
     def position_publish_loop(self, drone_id: int):
-        """✅ 位置發布循環（10Hz）"""
-        rate = 1.0 / self.PUBLISH_RATE
+        """✅ 位置發布循環（10Hz，TrajectorySetpoint 建議頻率）"""
+        rate = 1.0 / self.PUBLISH_RATE  # 10Hz = 0.1s
         state = self.drone_states[drone_id]
         
         while self.running:
@@ -907,6 +1216,13 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                         tz = state.current_position.z
                     else:
                         tx, ty, tz = 0.0, 0.0, 0.0
+                    
+                    # ✅ 新增：記錄位置歷史（用於 RViz2 軌跡）
+                    self.position_histories[drone_id].append({
+                        'x': state.current_position.x,
+                        'y': state.current_position.y,
+                        'z': state.current_position.z
+                    })
                 
                 self.publish_position(drone_id, tx, ty, tz)
                 time.sleep(rate)
@@ -915,10 +1231,97 @@ class MultiDronePositionOptimizer(Node, KeyboardCommander):
                 self.get_logger().error(f"Drone {drone_id}: 發布異常: {e}")
                 time.sleep(rate)
     
+    def _publish_rviz_visualization(self, drone_id: int, tx: float, ty: float, tz: float):
+        """✅ 新增：發布 RViz2 可視化數據（NED → ENU 轉換）"""
+        if drone_id not in self.drone_states:
+            return
+        
+        state = self.drone_states[drone_id]
+        now = self.get_clock().now().to_msg()
+        frame_id = 'map'
+        
+        # NED → ENU 轉換
+        def ned_to_enu(ned_x, ned_y, ned_z):
+            enu_x = ned_y      # East = NED East
+            enu_y = ned_x      # North = NED North
+            enu_z = -ned_z     # Up = -NED Down
+            return enu_x, enu_y, enu_z
+        
+        # 原點
+        if state.origin_xy is not None:
+            origin_pose = PoseStamped()
+            origin_pose.header.stamp = now
+            origin_pose.header.frame_id = frame_id
+            o_x, o_y, o_z = ned_to_enu(state.origin_xy[0], state.origin_xy[1], state.origin_z)
+            origin_pose.pose.position.x = o_x
+            origin_pose.pose.position.y = o_y
+            origin_pose.pose.position.z = o_z
+            origin_pose.pose.orientation.w = 1.0
+            self.origin_pubs[drone_id].publish(origin_pose)
+        
+        # 當前位置
+        current_pose = PoseStamped()
+        current_pose.header.stamp = now
+        current_pose.header.frame_id = frame_id
+        c_x, c_y, c_z = ned_to_enu(state.current_position.x, state.current_position.y, state.current_position.z)
+        current_pose.pose.position.x = c_x
+        current_pose.pose.position.y = c_y
+        current_pose.pose.position.z = c_z
+        current_pose.pose.orientation.w = 1.0
+        self.position_pubs[drone_id].publish(current_pose)
+        
+        # 目標位置
+        if state.target_position is not None:
+            target_pose = PoseStamped()
+            target_pose.header.stamp = now
+            target_pose.header.frame_id = frame_id
+            target_x, target_y, target_z = state.target_position
+            t_x, t_y, t_z = ned_to_enu(target_x, target_y, target_z)
+            target_pose.pose.position.x = t_x
+            target_pose.pose.position.y = t_y
+            target_pose.pose.position.z = t_z
+            target_pose.pose.orientation.w = 1.0
+            self.target_pubs[drone_id].publish(target_pose)
+        
+        # 軌跡
+        self.path_messages[drone_id].header = current_pose.header
+        self.path_messages[drone_id].poses.append(current_pose)
+        self.path_pubs[drone_id].publish(self.path_messages[drone_id])
+        
+        # 邊界框
+        marker_array = MarkerArray()
+        boundary_marker = Marker()
+        boundary_marker.header.stamp = now
+        boundary_marker.header.frame_id = frame_id
+        boundary_marker.id = 0
+        boundary_marker.type = Marker.CUBE
+        boundary_marker.action = Marker.ADD
+        
+        if state.origin_xy is not None:
+            b_x, b_y, b_z = ned_to_enu(state.origin_xy[0], state.origin_xy[1], state.origin_z - 1.5)
+        else:
+            b_x, b_y, b_z = 0.0, 0.0, 0.0
+        
+        boundary_marker.pose.position.x = b_x
+        boundary_marker.pose.position.y = b_y
+        boundary_marker.pose.position.z = b_z
+        boundary_marker.pose.orientation.w = 1.0
+        boundary_marker.scale.x = 3.2  # ✅ 對應 ±1.6m (2 × 1.6m)
+        boundary_marker.scale.y = 3.2  # ✅ 對應 ±1.6m
+        boundary_marker.scale.z = 3.5  # ✅ 對應 0~3.5m 高度
+        boundary_marker.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.3)
+        boundary_marker.lifetime = Duration(seconds=1).to_msg()
+        marker_array.markers.append(boundary_marker)
+        
+        self.boundary_pubs[drone_id].publish(marker_array)
+    
     def destroy_node(self):
         self.get_logger().info("正在关闭位置控制优化器...")
         self.running = False
         self.keyboard_running = False
+        
+        # ✅ 關閉訊號記錄檔案
+        self._close_signal_loggers()
         
         for drone_id, thread in self.decision_threads.items():
             thread.join(timeout=2.0)
